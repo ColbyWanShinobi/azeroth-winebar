@@ -96,20 +96,20 @@
     - Create comprehensive wine environment variable configuration
     - _Requirements: 3.1, 3.2_
 
-- [ ] 7. Develop launch script and desktop integration system
-  - [ ] 7.1 Create WoW launch script
+- [x] 7. Develop launch script and desktop integration system
+  - [x] 7.1 Create WoW launch script
     - Write wow-launch.sh based on sc-launch.sh template
     - Implement wine environment setup and path configuration
     - Add Battle.net launcher execution with proper arguments
     - _Requirements: 8.1, 8.2_
 
-  - [ ] 7.2 Implement desktop integration
+  - [x] 7.2 Implement desktop integration
     - Create .desktop file generation for Battle.net launcher
     - Write desktop entry installation and management
     - Implement icon handling and desktop environment integration
     - _Requirements: 8.3_
 
-  - [ ] 7.3 Add launch script optimization features
+  - [x] 7.3 Add launch script optimization features
     - Implement shader cache configuration for launch script
     - Write wine process cleanup and management
     - Add optional gamemode and gamescope integration support

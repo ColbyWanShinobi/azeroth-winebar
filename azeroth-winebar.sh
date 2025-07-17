@@ -3587,6 +3587,206 @@ reset_wine_environment() {
 }
 
 ############################################################################
+# Desktop Integration Functions
+############################################################################
+
+# Create Battle.net desktop entry
+create_battlenet_desktop_entry() {
+    local desktop_file_path="$1"
+    local launch_script_path="$2"
+    local icon_path="$3"
+    
+    debug_print continue "Creating Battle.net desktop entry at: $desktop_file_path"
+    
+    # Validate inputs
+    if [[ -z "$desktop_file_path" || -z "$launch_script_path" ]]; then
+        debug_print exit "Missing required parameters for desktop entry creation"
+        return 1
+    fi
+    
+    # Use default icon if not provided
+    if [[ -z "$icon_path" ]]; then
+        icon_path="applications-games"
+    fi
+    
+    # Create desktop entry content
+    cat > "$desktop_file_path" << EOF
+[Desktop Entry]
+Name=Battle.net
+Comment=Blizzard Battle.net Launcher for World of Warcraft
+Exec=$launch_script_path
+Icon=$icon_path
+Terminal=false
+Type=Application
+Categories=Game;
+StartupNotify=true
+StartupWMClass=battle.net.exe
+EOF
+    
+    if [[ $? -eq 0 ]]; then
+        debug_print continue "Desktop entry created successfully"
+        # Make desktop file executable
+        chmod +x "$desktop_file_path"
+        return 0
+    else
+        debug_print exit "Failed to create desktop entry"
+        return 1
+    fi
+}
+
+# Install desktop entry to system locations
+install_desktop_entry() {
+    local launch_script_path="$1"
+    local icon_path="$2"
+    
+    debug_print continue "Installing Battle.net desktop entry..."
+    
+    # Validate launch script exists
+    if [[ ! -f "$launch_script_path" ]]; then
+        debug_print exit "Launch script not found: $launch_script_path"
+        return 1
+    fi
+    
+    # Make launch script executable
+    chmod +x "$launch_script_path"
+    
+    # Desktop entry locations
+    local user_desktop="$HOME/Desktop/Battle.net.desktop"
+    local user_applications="$HOME/.local/share/applications/Battle.net.desktop"
+    
+    # Create directories if they don't exist
+    mkdir -p "$(dirname "$user_applications")"
+    
+    # Create desktop entry for user applications
+    if create_battlenet_desktop_entry "$user_applications" "$launch_script_path" "$icon_path"; then
+        debug_print continue "Desktop entry installed to applications menu"
+    else
+        debug_print continue "Warning: Failed to install desktop entry to applications menu"
+    fi
+    
+    # Ask user if they want desktop shortcut
+    if message question "Desktop Shortcut" "Would you like to create a desktop shortcut for Battle.net?"; then
+        if create_battlenet_desktop_entry "$user_desktop" "$launch_script_path" "$icon_path"; then
+            debug_print continue "Desktop shortcut created"
+            message info "Desktop Integration" "Battle.net desktop entries have been created successfully.\n\nYou can now launch World of Warcraft from your applications menu or desktop."
+        else
+            debug_print continue "Warning: Failed to create desktop shortcut"
+            message warning "Desktop Integration" "Desktop entry was created in applications menu, but desktop shortcut creation failed."
+        fi
+    else
+        message info "Desktop Integration" "Battle.net desktop entry has been created in your applications menu."
+    fi
+    
+    return 0
+}
+
+# Download and install Battle.net icon
+install_battlenet_icon() {
+    local icon_dir="$HOME/.local/share/icons/hicolor/256x256/apps"
+    local icon_file="$icon_dir/battlenet.png"
+    local icon_url="https://logos-world.net/wp-content/uploads/2021/10/Blizzard-Battle.net-Logo.png"
+    
+    debug_print continue "Installing Battle.net icon..."
+    
+    # Create icon directory
+    if ! mkdir -p "$icon_dir"; then
+        debug_print continue "Warning: Failed to create icon directory"
+        return 1
+    fi
+    
+    # Download icon if it doesn't exist
+    if [[ ! -f "$icon_file" ]]; then
+        debug_print continue "Downloading Battle.net icon..."
+        if command_exists curl; then
+            if curl -L -o "$icon_file" "$icon_url" 2>/dev/null; then
+                debug_print continue "Battle.net icon downloaded successfully"
+                # Update icon cache if available
+                if command_exists gtk-update-icon-cache; then
+                    gtk-update-icon-cache -f -t "$HOME/.local/share/icons/hicolor" 2>/dev/null || true
+                fi
+                echo "$icon_file"
+                return 0
+            else
+                debug_print continue "Warning: Failed to download Battle.net icon"
+            fi
+        else
+            debug_print continue "Warning: curl not available for icon download"
+        fi
+    else
+        debug_print continue "Battle.net icon already exists"
+        echo "$icon_file"
+        return 0
+    fi
+    
+    # Return default icon name if download failed
+    echo "applications-games"
+    return 1
+}
+
+# Remove desktop integration
+remove_desktop_integration() {
+    debug_print continue "Removing Battle.net desktop integration..."
+    
+    local user_desktop="$HOME/Desktop/Battle.net.desktop"
+    local user_applications="$HOME/.local/share/applications/Battle.net.desktop"
+    local icon_file="$HOME/.local/share/icons/hicolor/256x256/apps/battlenet.png"
+    
+    # Remove desktop files
+    if [[ -f "$user_desktop" ]]; then
+        rm -f "$user_desktop"
+        debug_print continue "Removed desktop shortcut"
+    fi
+    
+    if [[ -f "$user_applications" ]]; then
+        rm -f "$user_applications"
+        debug_print continue "Removed applications menu entry"
+    fi
+    
+    # Remove icon
+    if [[ -f "$icon_file" ]]; then
+        rm -f "$icon_file"
+        debug_print continue "Removed Battle.net icon"
+        # Update icon cache if available
+        if command_exists gtk-update-icon-cache; then
+            gtk-update-icon-cache -f -t "$HOME/.local/share/icons/hicolor" 2>/dev/null || true
+        fi
+    fi
+    
+    message info "Desktop Integration" "Battle.net desktop integration has been removed."
+    return 0
+}
+
+# Setup complete desktop integration
+setup_desktop_integration() {
+    debug_print continue "Setting up complete desktop integration..."
+    
+    # Get current script directory
+    local script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    local launch_script="$script_dir/lib/wow-launch.sh"
+    
+    # Validate launch script exists
+    if [[ ! -f "$launch_script" ]]; then
+        debug_print exit "Launch script not found: $launch_script"
+        message error "Desktop Integration Error" "Launch script not found. Please ensure the installation is complete."
+        return 1
+    fi
+    
+    # Install icon and get path
+    local icon_path
+    icon_path=$(install_battlenet_icon)
+    
+    # Install desktop entries
+    if install_desktop_entry "$launch_script" "$icon_path"; then
+        debug_print continue "Desktop integration setup completed successfully"
+        return 0
+    else
+        debug_print exit "Failed to setup desktop integration"
+        message error "Desktop Integration Error" "Failed to create desktop entries. Please check permissions and try again."
+        return 1
+    fi
+}
+
+############################################################################
 # Main Application Functions
 ############################################################################
 
