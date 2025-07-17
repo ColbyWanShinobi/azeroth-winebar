@@ -77,20 +77,20 @@
     - Implement hardware acceleration disable and streaming disable
     - _Requirements: 7.1, 7.2, 7.3, 7.4, 7.5_
 
-- [ ] 6. Create WoW-specific optimization and configuration system
-  - [ ] 6.1 Implement WoW configuration file management
+- [x] 6. Create WoW-specific optimization and configuration system
+  - [x] 6.1 Implement WoW configuration file management
     - Create Config.wtf modification functions
     - Write worldPreloadNonCritical setting application
     - Implement rawMouseEnable configuration for cursor fixes
     - _Requirements: 3.4, 3.5_
 
-  - [ ] 6.2 Build DXVK and graphics optimization system
+  - [x] 6.2 Build DXVK and graphics optimization system
     - Create DXVK configuration file generation
     - Implement shader cache environment variable setup
     - Write graphics optimization settings for Nvidia and AMD
     - _Requirements: 3.1, 8.4_
 
-  - [ ] 6.3 Create wine environment configuration
+  - [x] 6.3 Create wine environment configuration
     - Implement wine DLL overrides for nvapi disabling
     - Write DXVK and staging memory environment setup
     - Create comprehensive wine environment variable configuration

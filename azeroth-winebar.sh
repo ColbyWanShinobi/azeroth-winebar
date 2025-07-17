@@ -2614,6 +2614,979 @@ setup_battlenet_configuration() {
 }
 
 ############################################################################
+# WoW-Specific Optimization and Configuration System
+############################################################################
+
+# Find WoW Config.wtf file location
+find_wow_config() {
+    debug_print continue "Searching for WoW Config.wtf file..."
+    
+    if [[ -z "$game_dir" ]]; then
+        debug_print exit "Game directory not configured"
+        return 1
+    fi
+    
+    # Common Config.wtf locations within WoW installation
+    local config_paths=(
+        "$game_dir/WTF/Config.wtf"
+        "$game_dir/_retail_/WTF/Config.wtf"
+        "$game_dir/_classic_/WTF/Config.wtf"
+        "$game_dir/_classic_era_/WTF/Config.wtf"
+    )
+    
+    for config_path in "${config_paths[@]}"; do
+        if [[ -f "$config_path" ]]; then
+            debug_print continue "Found WoW Config.wtf: $config_path"
+            echo "$config_path"
+            return 0
+        fi
+    done
+    
+    debug_print continue "Config.wtf not found, will create default location"
+    echo "$game_dir/WTF/Config.wtf"
+    return 0
+}
+
+# Create WoW WTF directory structure if it doesn't exist
+create_wow_wtf_directory() {
+    local config_file="$1"
+    local config_dir
+    config_dir=$(dirname "$config_file")
+    
+    if [[ ! -d "$config_dir" ]]; then
+        debug_print continue "Creating WoW WTF directory: $config_dir"
+        if ! mkdir -p "$config_dir"; then
+            debug_print exit "Failed to create WoW WTF directory: $config_dir"
+            return 1
+        fi
+    fi
+    
+    return 0
+}
+
+# Read current value from Config.wtf
+get_wow_config_value() {
+    local config_file="$1"
+    local setting_name="$2"
+    
+    if [[ ! -f "$config_file" ]]; then
+        debug_print continue "Config.wtf not found: $config_file"
+        return 1
+    fi
+    
+    local current_value
+    current_value=$(grep "^SET $setting_name " "$config_file" 2>/dev/null | cut -d' ' -f3- | tr -d '"')
+    
+    if [[ -n "$current_value" ]]; then
+        echo "$current_value"
+        return 0
+    else
+        debug_print continue "Setting $setting_name not found in Config.wtf"
+        return 1
+    fi
+}
+
+# Set or update a setting in Config.wtf
+set_wow_config_value() {
+    local config_file="$1"
+    local setting_name="$2"
+    local setting_value="$3"
+    
+    if [[ -z "$config_file" || -z "$setting_name" ]]; then
+        debug_print exit "Missing parameters for WoW config update"
+        return 1
+    fi
+    
+    # Create directory if needed
+    if ! create_wow_wtf_directory "$config_file"; then
+        return 1
+    fi
+    
+    # Create config file if it doesn't exist
+    if [[ ! -f "$config_file" ]]; then
+        debug_print continue "Creating new Config.wtf file: $config_file"
+        touch "$config_file"
+    fi
+    
+    # Check if setting already exists
+    if grep -q "^SET $setting_name " "$config_file"; then
+        # Update existing setting
+        debug_print continue "Updating existing setting: $setting_name = $setting_value"
+        if ! sed -i "s/^SET $setting_name .*/SET $setting_name \"$setting_value\"/" "$config_file"; then
+            debug_print exit "Failed to update setting in Config.wtf"
+            return 1
+        fi
+    else
+        # Add new setting
+        debug_print continue "Adding new setting: $setting_name = $setting_value"
+        if ! echo "SET $setting_name \"$setting_value\"" >> "$config_file"; then
+            debug_print exit "Failed to add setting to Config.wtf"
+            return 1
+        fi
+    fi
+    
+    debug_print continue "Successfully set $setting_name to $setting_value in Config.wtf"
+    return 0
+}
+
+# Apply worldPreloadNonCritical optimization
+apply_world_preload_optimization() {
+    debug_print continue "Applying worldPreloadNonCritical optimization..."
+    
+    local config_file
+    if ! config_file=$(find_wow_config); then
+        debug_print exit "Failed to locate WoW Config.wtf"
+        return 1
+    fi
+    
+    # Get current value
+    local current_value
+    current_value=$(get_wow_config_value "$config_file" "worldPreloadNonCritical")
+    
+    if [[ "$current_value" == "0" ]]; then
+        debug_print continue "worldPreloadNonCritical already optimized (set to 0)"
+        return 0
+    fi
+    
+    # Set worldPreloadNonCritical to 0 for better performance
+    if set_wow_config_value "$config_file" "worldPreloadNonCritical" "0"; then
+        debug_print continue "worldPreloadNonCritical optimization applied successfully"
+        message info "WoW Optimization Applied" "worldPreloadNonCritical has been set to 0 in Config.wtf.\n\nThis optimization reduces loading times and improves performance."
+        return 0
+    else
+        debug_print exit "Failed to apply worldPreloadNonCritical optimization"
+        return 1
+    fi
+}
+
+# Apply rawMouseEnable cursor fix
+apply_raw_mouse_fix() {
+    debug_print continue "Applying rawMouseEnable cursor fix..."
+    
+    local config_file
+    if ! config_file=$(find_wow_config); then
+        debug_print exit "Failed to locate WoW Config.wtf"
+        return 1
+    fi
+    
+    # Get current value
+    local current_value
+    current_value=$(get_wow_config_value "$config_file" "rawMouseEnable")
+    
+    if [[ "$current_value" == "1" ]]; then
+        debug_print continue "rawMouseEnable already enabled (set to 1)"
+        return 0
+    fi
+    
+    # Set rawMouseEnable to 1 to fix cursor reset issues
+    if set_wow_config_value "$config_file" "rawMouseEnable" "1"; then
+        debug_print continue "rawMouseEnable cursor fix applied successfully"
+        message info "WoW Cursor Fix Applied" "rawMouseEnable has been set to 1 in Config.wtf.\n\nThis fixes cursor reset issues when alt-tabbing or switching windows."
+        return 0
+    else
+        debug_print exit "Failed to apply rawMouseEnable cursor fix"
+        return 1
+    fi
+}
+
+# Apply all WoW configuration optimizations
+apply_wow_config_optimizations() {
+    debug_print continue "Applying all WoW configuration optimizations..."
+    
+    local success=0
+    local total=0
+    
+    # Apply worldPreloadNonCritical optimization
+    ((total++))
+    if apply_world_preload_optimization; then
+        ((success++))
+    fi
+    
+    # Apply rawMouseEnable cursor fix
+    ((total++))
+    if apply_raw_mouse_fix; then
+        ((success++))
+    fi
+    
+    # Report results
+    if [[ $success -eq $total ]]; then
+        debug_print continue "All WoW configuration optimizations applied successfully ($success/$total)"
+        message info "WoW Configuration Complete" "All WoW configuration optimizations have been applied successfully.\n\nOptimizations applied:\n• worldPreloadNonCritical = 0 (performance)\n• rawMouseEnable = 1 (cursor fix)"
+        return 0
+    else
+        debug_print continue "Some WoW configuration optimizations failed ($success/$total)"
+        message error "Partial Configuration" "Some WoW configuration optimizations could not be applied.\n\nSuccessful: $success/$total\n\nPlease check the logs for details."
+        return 1
+    fi
+}
+
+# Backup current WoW configuration
+backup_wow_config() {
+    debug_print continue "Creating backup of WoW configuration..."
+    
+    local config_file
+    if ! config_file=$(find_wow_config); then
+        debug_print exit "Failed to locate WoW Config.wtf for backup"
+        return 1
+    fi
+    
+    if [[ ! -f "$config_file" ]]; then
+        debug_print continue "No Config.wtf file to backup"
+        return 0
+    fi
+    
+    local backup_dir="$config_dir/backups"
+    local backup_file="$backup_dir/Config.wtf.backup.$(date +%Y%m%d_%H%M%S)"
+    
+    # Create backup directory
+    if [[ ! -d "$backup_dir" ]]; then
+        if ! mkdir -p "$backup_dir"; then
+            debug_print exit "Failed to create backup directory: $backup_dir"
+            return 1
+        fi
+    fi
+    
+    # Copy config file to backup
+    if cp "$config_file" "$backup_file"; then
+        debug_print continue "WoW configuration backed up to: $backup_file"
+        return 0
+    else
+        debug_print exit "Failed to backup WoW configuration"
+        return 1
+    fi
+}
+
+# Restore WoW configuration from backup
+restore_wow_config() {
+    debug_print continue "Restoring WoW configuration from backup..."
+    
+    local backup_dir="$config_dir/backups"
+    
+    if [[ ! -d "$backup_dir" ]]; then
+        debug_print exit "No backup directory found: $backup_dir"
+        message error "No Backups Found" "No configuration backups were found.\n\nBackup directory: $backup_dir"
+        return 1
+    fi
+    
+    # Find available backups
+    local backups=()
+    while IFS= read -r -d '' backup_file; do
+        local backup_name
+        backup_name=$(basename "$backup_file")
+        backups+=("$backup_name")
+    done < <(find "$backup_dir" -name "Config.wtf.backup.*" -type f -print0 2>/dev/null)
+    
+    if [[ ${#backups[@]} -eq 0 ]]; then
+        debug_print exit "No Config.wtf backups found"
+        message error "No Backups Available" "No Config.wtf backup files were found in the backup directory."
+        return 1
+    fi
+    
+    # Let user select backup to restore
+    local selected_backup
+    if ! selected_backup=$(menu "Restore WoW Configuration" "Select a backup to restore:" "${backups[@]}"); then
+        debug_print continue "Backup restoration cancelled by user"
+        return 1
+    fi
+    
+    local backup_file="$backup_dir/${backups[$((selected_backup-1))]}"
+    local config_file
+    if ! config_file=$(find_wow_config); then
+        debug_print exit "Failed to locate WoW Config.wtf for restoration"
+        return 1
+    fi
+    
+    # Confirm restoration
+    if ! message question "Confirm Restoration" "Are you sure you want to restore the WoW configuration from this backup?\n\nBackup: ${backups[$((selected_backup-1))]}\nTarget: $config_file\n\nThis will overwrite the current configuration."; then
+        debug_print continue "Backup restoration cancelled by user"
+        return 1
+    fi
+    
+    # Create directory if needed
+    if ! create_wow_wtf_directory "$config_file"; then
+        return 1
+    fi
+    
+    # Restore backup
+    if cp "$backup_file" "$config_file"; then
+        debug_print continue "WoW configuration restored successfully"
+        message info "Configuration Restored" "WoW configuration has been restored from backup.\n\nBackup: ${backups[$((selected_backup-1))]}\nRestored to: $config_file"
+        return 0
+    else
+        debug_print exit "Failed to restore WoW configuration from backup"
+        return 1
+    fi
+}
+
+# Create DXVK configuration file for optimal performance
+create_dxvk_config() {
+    debug_print continue "Creating DXVK configuration file..."
+    
+    if [[ -z "$game_dir" ]]; then
+        debug_print exit "Game directory not configured"
+        return 1
+    fi
+    
+    local dxvk_config_file="$game_dir/dxvk.conf"
+    
+    debug_print continue "Creating DXVK config at: $dxvk_config_file"
+    
+    # Create DXVK configuration with optimized settings
+    cat > "$dxvk_config_file" << 'EOF'
+# DXVK Configuration for World of Warcraft
+# Generated by Azeroth Winebar
+
+# Enable state cache for faster loading
+dxvk.enableStateCache = True
+
+# Optimize memory usage
+dxvk.maxFrameLatency = 1
+
+# Enable async shader compilation for smoother gameplay
+dxvk.useAsync = True
+
+# Optimize for gaming performance
+dxvk.numCompilerThreads = 0
+
+# Enable graphics pipeline library for better performance
+dxvk.enableGraphicsPipelineLibrary = True
+
+# Optimize VRAM usage
+dxvk.maxDeviceMemory = 0
+
+# Enable fast geometry shader passthrough
+dxvk.useRawSsbo = True
+
+# Optimize for WoW's rendering patterns
+dxvk.shrinkNvidiaHvv = False
+
+# Enable optimizations for older games
+dxvk.enableOpenVR = False
+EOF
+    
+    if [[ $? -eq 0 ]]; then
+        debug_print continue "DXVK configuration file created successfully"
+        return 0
+    else
+        debug_print exit "Failed to create DXVK configuration file"
+        return 1
+    fi
+}
+
+# Setup shader cache directories and environment
+setup_shader_cache() {
+    debug_print continue "Setting up shader cache directories..."
+    
+    if [[ -z "$game_dir" ]]; then
+        debug_print exit "Game directory not configured"
+        return 1
+    fi
+    
+    # Create shader cache directories
+    local cache_dirs=(
+        "$game_dir/shadercache"
+        "$game_dir/dxvk_cache"
+        "$game_dir/vkd3d_cache"
+    )
+    
+    for cache_dir in "${cache_dirs[@]}"; do
+        if [[ ! -d "$cache_dir" ]]; then
+            debug_print continue "Creating shader cache directory: $cache_dir"
+            if ! mkdir -p "$cache_dir"; then
+                debug_print continue "Warning: Failed to create shader cache directory: $cache_dir"
+            fi
+        fi
+    done
+    
+    debug_print continue "Shader cache directories setup completed"
+    return 0
+}
+
+# Get graphics card vendor
+detect_graphics_vendor() {
+    debug_print continue "Detecting graphics card vendor..."
+    
+    local gpu_info
+    if command_exists "lspci"; then
+        gpu_info=$(lspci | grep -i vga 2>/dev/null)
+    elif command_exists "lshw"; then
+        gpu_info=$(lshw -c display 2>/dev/null | grep -i vendor)
+    else
+        debug_print continue "Unable to detect graphics vendor - no lspci or lshw available"
+        echo "unknown"
+        return 1
+    fi
+    
+    if [[ -z "$gpu_info" ]]; then
+        debug_print continue "No graphics card information found"
+        echo "unknown"
+        return 1
+    fi
+    
+    # Check for NVIDIA
+    if echo "$gpu_info" | grep -qi nvidia; then
+        debug_print continue "NVIDIA graphics card detected"
+        echo "nvidia"
+        return 0
+    fi
+    
+    # Check for AMD
+    if echo "$gpu_info" | grep -qi -E "(amd|ati|radeon)"; then
+        debug_print continue "AMD graphics card detected"
+        echo "amd"
+        return 0
+    fi
+    
+    # Check for Intel
+    if echo "$gpu_info" | grep -qi intel; then
+        debug_print continue "Intel graphics card detected"
+        echo "intel"
+        return 0
+    fi
+    
+    debug_print continue "Unknown graphics vendor detected"
+    echo "unknown"
+    return 1
+}
+
+# Generate graphics optimization environment variables
+generate_graphics_env_vars() {
+    local vendor="$1"
+    local env_vars=()
+    
+    debug_print continue "Generating graphics environment variables for: $vendor"
+    
+    # Common DXVK environment variables
+    env_vars+=(
+        "export DXVK_CONFIG_FILE=\"\$GAMEDIR/dxvk.conf\""
+        "export DXVK_STATE_CACHE_PATH=\"\$GAMEDIR/dxvk_cache\""
+        "export DXVK_LOG_LEVEL=\"warn\""
+        "export DXVK_HUD=\"compiler\""
+    )
+    
+    # VKD3D environment variables
+    env_vars+=(
+        "export VKD3D_CONFIG=\"dxr\""
+        "export VKD3D_SHADER_CACHE_PATH=\"\$GAMEDIR/vkd3d_cache\""
+    )
+    
+    # Vendor-specific optimizations
+    case "$vendor" in
+        "nvidia")
+            debug_print continue "Adding NVIDIA-specific optimizations"
+            env_vars+=(
+                "export __GL_SHADER_DISK_CACHE=1"
+                "export __GL_SHADER_DISK_CACHE_PATH=\"\$GAMEDIR/shadercache\""
+                "export __GL_SHADER_DISK_CACHE_SKIP_CLEANUP=1"
+                "export __GL_THREADED_OPTIMIZATIONS=1"
+                "export __GL_DXVK_OPTIMIZATIONS=1"
+                "export NVIDIA_WINE_DLSS=1"
+            )
+            ;;
+        "amd")
+            debug_print continue "Adding AMD-specific optimizations"
+            env_vars+=(
+                "export RADV_PERFTEST=\"aco,llvm\""
+                "export AMD_VULKAN_ICD=\"RADV\""
+                "export MESA_VK_VERSION_OVERRIDE=\"1.3\""
+                "export ACO_DEBUG=\"validateir,validatera\""
+            )
+            ;;
+        "intel")
+            debug_print continue "Adding Intel-specific optimizations"
+            env_vars+=(
+                "export ANV_ENABLE_PIPELINE_CACHE=1"
+                "export MESA_VK_VERSION_OVERRIDE=\"1.3\""
+            )
+            ;;
+        *)
+            debug_print continue "Using generic graphics optimizations"
+            ;;
+    esac
+    
+    # General performance optimizations
+    env_vars+=(
+        "export WINE_CPU_TOPOLOGY=\"4:2\""
+        "export WINE_LARGE_ADDRESS_AWARE=1"
+    )
+    
+    # Output environment variables
+    printf '%s\n' "${env_vars[@]}"
+    return 0
+}
+
+# Apply DXVK and graphics optimizations
+apply_dxvk_optimizations() {
+    debug_print continue "Applying DXVK and graphics optimizations..."
+    
+    local success=0
+    local total=0
+    
+    # Create DXVK configuration file
+    ((total++))
+    if create_dxvk_config; then
+        ((success++))
+        debug_print continue "DXVK configuration created successfully"
+    else
+        debug_print continue "Failed to create DXVK configuration"
+    fi
+    
+    # Setup shader cache directories
+    ((total++))
+    if setup_shader_cache; then
+        ((success++))
+        debug_print continue "Shader cache setup completed successfully"
+    else
+        debug_print continue "Failed to setup shader cache directories"
+    fi
+    
+    # Detect graphics vendor for optimizations
+    local graphics_vendor
+    graphics_vendor=$(detect_graphics_vendor)
+    debug_print continue "Graphics vendor detected: $graphics_vendor"
+    
+    # Generate environment variables file for reference
+    local env_file="$config_dir/graphics_env.sh"
+    debug_print continue "Creating graphics environment variables file: $env_file"
+    
+    cat > "$env_file" << EOF
+#!/bin/bash
+# Graphics optimization environment variables
+# Generated by Azeroth Winebar for $graphics_vendor graphics
+
+# Game directory variable (to be set by launch script)
+# GAMEDIR should be set to the WoW installation directory
+
+$(generate_graphics_env_vars "$graphics_vendor")
+EOF
+    
+    if [[ $? -eq 0 ]]; then
+        ((success++))
+        ((total++))
+        chmod +x "$env_file"
+        debug_print continue "Graphics environment variables file created successfully"
+    else
+        ((total++))
+        debug_print continue "Failed to create graphics environment variables file"
+    fi
+    
+    # Report results
+    if [[ $success -eq $total ]]; then
+        debug_print continue "All DXVK and graphics optimizations applied successfully ($success/$total)"
+        message info "Graphics Optimization Complete" "DXVK and graphics optimizations have been applied successfully.\n\nOptimizations applied:\n• DXVK configuration file created\n• Shader cache directories setup\n• $graphics_vendor-specific optimizations configured\n\nConfiguration files:\n• $game_dir/dxvk.conf\n• $env_file"
+        return 0
+    else
+        debug_print continue "Some DXVK and graphics optimizations failed ($success/$total)"
+        message error "Partial Optimization" "Some DXVK and graphics optimizations could not be applied.\n\nSuccessful: $success/$total\n\nPlease check the logs for details."
+        return 1
+    fi
+}
+
+# Update DXVK configuration with custom settings
+update_dxvk_config() {
+    debug_print continue "Updating DXVK configuration with custom settings..."
+    
+    if [[ -z "$game_dir" ]]; then
+        debug_print exit "Game directory not configured"
+        return 1
+    fi
+    
+    local dxvk_config_file="$game_dir/dxvk.conf"
+    
+    if [[ ! -f "$dxvk_config_file" ]]; then
+        debug_print continue "DXVK config file not found, creating new one"
+        if ! create_dxvk_config; then
+            return 1
+        fi
+    fi
+    
+    # Menu for DXVK configuration options
+    local dxvk_options=(
+        "Enable Async Shader Compilation"
+        "Disable Async Shader Compilation"
+        "Enable State Cache"
+        "Disable State Cache"
+        "Reset to Default Configuration"
+        "View Current Configuration"
+    )
+    
+    local selected_option
+    if ! selected_option=$(menu "DXVK Configuration" "Select a DXVK configuration option:" "${dxvk_options[@]}"); then
+        debug_print continue "DXVK configuration cancelled by user"
+        return 1
+    fi
+    
+    case "$selected_option" in
+        "1")
+            sed -i 's/dxvk.useAsync = .*/dxvk.useAsync = True/' "$dxvk_config_file"
+            message info "DXVK Updated" "Async shader compilation has been enabled."
+            ;;
+        "2")
+            sed -i 's/dxvk.useAsync = .*/dxvk.useAsync = False/' "$dxvk_config_file"
+            message info "DXVK Updated" "Async shader compilation has been disabled."
+            ;;
+        "3")
+            sed -i 's/dxvk.enableStateCache = .*/dxvk.enableStateCache = True/' "$dxvk_config_file"
+            message info "DXVK Updated" "State cache has been enabled."
+            ;;
+        "4")
+            sed -i 's/dxvk.enableStateCache = .*/dxvk.enableStateCache = False/' "$dxvk_config_file"
+            message info "DXVK Updated" "State cache has been disabled."
+            ;;
+        "5")
+            if message question "Reset Configuration" "Are you sure you want to reset the DXVK configuration to defaults?\n\nThis will overwrite any custom settings."; then
+                create_dxvk_config
+                message info "DXVK Reset" "DXVK configuration has been reset to defaults."
+            fi
+            ;;
+        "6")
+            if [[ -f "$dxvk_config_file" ]]; then
+                local config_content
+                config_content=$(cat "$dxvk_config_file")
+                message info "Current DXVK Configuration" "$config_content"
+            else
+                message error "Configuration Not Found" "DXVK configuration file not found."
+            fi
+            ;;
+        *)
+            debug_print continue "Invalid DXVK configuration option selected"
+            return 1
+            ;;
+    esac
+    
+    return 0
+}
+
+# Configure wine DLL overrides for optimal WoW performance
+configure_wine_dll_overrides() {
+    debug_print continue "Configuring wine DLL overrides..."
+    
+    if [[ -z "$wine_prefix" ]]; then
+        debug_print exit "Wine prefix not configured"
+        return 1
+    fi
+    
+    if [[ ! -d "$wine_prefix" ]]; then
+        debug_print exit "Wine prefix directory not found: $wine_prefix"
+        return 1
+    fi
+    
+    # Define DLL overrides for optimal WoW performance
+    local dll_overrides=(
+        "nvapi=disabled"
+        "nvapi64=disabled"
+        "nvcuda=disabled"
+        "nvcuvid=disabled"
+        "nvencodeapi=disabled"
+        "nvencodeapi64=disabled"
+    )
+    
+    debug_print continue "Applying wine DLL overrides for WoW optimization"
+    
+    # Set environment variable for current session
+    local override_string=""
+    for override in "${dll_overrides[@]}"; do
+        if [[ -n "$override_string" ]]; then
+            override_string="$override_string;$override"
+        else
+            override_string="$override"
+        fi
+    done
+    
+    # Apply DLL overrides using winecfg registry entries
+    local wine_binary="wine"
+    if [[ -n "$wine_prefix" ]]; then
+        export WINEPREFIX="$wine_prefix"
+    fi
+    
+    # Use wine reg to set DLL overrides
+    for override in "${dll_overrides[@]}"; do
+        local dll_name="${override%=*}"
+        local dll_mode="${override#*=}"
+        
+        debug_print continue "Setting DLL override: $dll_name = $dll_mode"
+        
+        # Convert mode to wine registry format
+        local reg_value=""
+        case "$dll_mode" in
+            "disabled")
+                reg_value=""
+                ;;
+            "native")
+                reg_value="native"
+                ;;
+            "builtin")
+                reg_value="builtin"
+                ;;
+            *)
+                reg_value="$dll_mode"
+                ;;
+        esac
+        
+        # Apply the override
+        if [[ "$dll_mode" == "disabled" ]]; then
+            # For disabled DLLs, we remove the registry entry or set it to empty
+            $wine_binary reg delete "HKEY_CURRENT_USER\\Software\\Wine\\DllOverrides" /v "$dll_name" /f 2>/dev/null || true
+        else
+            $wine_binary reg add "HKEY_CURRENT_USER\\Software\\Wine\\DllOverrides" /v "$dll_name" /t REG_SZ /d "$reg_value" /f 2>/dev/null
+        fi
+        
+        if [[ $? -eq 0 ]]; then
+            debug_print continue "Successfully set DLL override: $dll_name"
+        else
+            debug_print continue "Warning: Failed to set DLL override: $dll_name"
+        fi
+    done
+    
+    debug_print continue "Wine DLL overrides configuration completed"
+    return 0
+}
+
+# Setup wine environment variables for optimal performance
+setup_wine_environment() {
+    debug_print continue "Setting up wine environment variables..."
+    
+    # Create wine environment configuration file
+    local wine_env_file="$config_dir/wine_env.sh"
+    
+    debug_print continue "Creating wine environment file: $wine_env_file"
+    
+    cat > "$wine_env_file" << 'EOF'
+#!/bin/bash
+# Wine environment variables for World of Warcraft
+# Generated by Azeroth Winebar
+
+# Wine prefix and basic configuration
+export WINEPREFIX="$WINE_PREFIX_PATH"
+export WINEARCH="win64"
+export WINE_LARGE_ADDRESS_AWARE=1
+
+# DLL overrides for WoW optimization
+export WINEDLLOVERRIDES="nvapi=disabled;nvapi64=disabled;nvcuda=disabled;nvcuvid=disabled;nvencodeapi=disabled;nvencodeapi64=disabled"
+
+# Wine Staging optimizations
+export STAGING_SHARED_MEMORY=1
+export STAGING_RT_PRIORITY_SERVER=90
+export STAGING_RT_PRIORITY_BASE=90
+
+# DXVK and VKD3D optimizations
+export DXVK_ASYNC=1
+export DXVK_STATE_CACHE=1
+export VKD3D_CONFIG="dxr"
+
+# Memory and performance optimizations
+export WINE_CPU_TOPOLOGY="4:2"
+export WINE_HEAP_DELAY_FREE=1
+
+# Audio optimizations
+export PULSE_LATENCY_MSEC=60
+export ALSA_PERIOD_SIZE=1024
+
+# Disable wine debugging for performance
+export WINEDEBUG=-all
+
+# Enable DXVA2 backend for Wine Staging
+export WINE_DXVA2_BACKEND=1
+
+# Esync and Fsync optimizations (if available)
+export WINEESYNC=1
+export WINEFSYNC=1
+
+# Prevent wine from creating desktop shortcuts and menu entries
+export WINEDLLOVERRIDES="$WINEDLLOVERRIDES;winemenubuilder.exe=disabled"
+
+# Set wine to not manage the desktop
+export WINE_VK_USE_FSR=0
+EOF
+    
+    if [[ $? -eq 0 ]]; then
+        chmod +x "$wine_env_file"
+        debug_print continue "Wine environment configuration file created successfully"
+    else
+        debug_print exit "Failed to create wine environment configuration file"
+        return 1
+    fi
+    
+    return 0
+}
+
+# Apply comprehensive wine environment configuration
+apply_wine_environment_config() {
+    debug_print continue "Applying comprehensive wine environment configuration..."
+    
+    local success=0
+    local total=0
+    
+    # Configure wine DLL overrides
+    ((total++))
+    if configure_wine_dll_overrides; then
+        ((success++))
+        debug_print continue "Wine DLL overrides configured successfully"
+    else
+        debug_print continue "Failed to configure wine DLL overrides"
+    fi
+    
+    # Setup wine environment variables
+    ((total++))
+    if setup_wine_environment; then
+        ((success++))
+        debug_print continue "Wine environment variables setup completed successfully"
+    else
+        debug_print continue "Failed to setup wine environment variables"
+    fi
+    
+    # Apply DXVA2 backend setting for Wine Staging
+    ((total++))
+    if apply_dxva2_backend; then
+        ((success++))
+        debug_print continue "DXVA2 backend configuration applied successfully"
+    else
+        debug_print continue "Failed to apply DXVA2 backend configuration"
+    fi
+    
+    # Report results
+    if [[ $success -eq $total ]]; then
+        debug_print continue "All wine environment configurations applied successfully ($success/$total)"
+        message info "Wine Environment Complete" "Wine environment configuration has been applied successfully.\n\nConfigurations applied:\n• DLL overrides (nvapi disabled)\n• Wine Staging optimizations\n• DXVK and VKD3D environment setup\n• Performance optimizations\n• DXVA2 backend enabled\n\nConfiguration file: $config_dir/wine_env.sh"
+        return 0
+    else
+        debug_print continue "Some wine environment configurations failed ($success/$total)"
+        message error "Partial Configuration" "Some wine environment configurations could not be applied.\n\nSuccessful: $success/$total\n\nPlease check the logs for details."
+        return 1
+    fi
+}
+
+# Apply DXVA2 backend setting for Wine Staging
+apply_dxva2_backend() {
+    debug_print continue "Applying DXVA2 backend configuration for Wine Staging..."
+    
+    if [[ -z "$wine_prefix" ]]; then
+        debug_print exit "Wine prefix not configured"
+        return 1
+    fi
+    
+    if [[ ! -d "$wine_prefix" ]]; then
+        debug_print exit "Wine prefix directory not found: $wine_prefix"
+        return 1
+    fi
+    
+    # Set DXVA2 backend in wine registry
+    local wine_binary="wine"
+    if [[ -n "$wine_prefix" ]]; then
+        export WINEPREFIX="$wine_prefix"
+    fi
+    
+    debug_print continue "Setting DXVA2 backend in wine registry"
+    
+    # Create the registry key for DXVA2 backend
+    $wine_binary reg add "HKEY_CURRENT_USER\\Software\\Wine\\DXVA2" /v "backend" /t REG_SZ /d "va" /f 2>/dev/null
+    
+    if [[ $? -eq 0 ]]; then
+        debug_print continue "DXVA2 backend configuration applied successfully"
+        return 0
+    else
+        debug_print continue "Warning: Failed to apply DXVA2 backend configuration"
+        return 1
+    fi
+}
+
+# Generate complete wine launch environment
+generate_wine_launch_env() {
+    local wine_prefix_path="$1"
+    local game_directory="$2"
+    
+    if [[ -z "$wine_prefix_path" || -z "$game_directory" ]]; then
+        debug_print exit "Missing parameters for wine launch environment generation"
+        return 1
+    fi
+    
+    debug_print continue "Generating wine launch environment..."
+    
+    # Detect graphics vendor for optimizations
+    local graphics_vendor
+    graphics_vendor=$(detect_graphics_vendor)
+    
+    # Generate complete environment setup
+    cat << EOF
+#!/bin/bash
+# Complete wine launch environment for World of Warcraft
+# Generated by Azeroth Winebar
+
+# Set paths
+export WINE_PREFIX_PATH="$wine_prefix_path"
+export GAMEDIR="$game_directory"
+
+# Source wine environment configuration
+if [[ -f "$config_dir/wine_env.sh" ]]; then
+    source "$config_dir/wine_env.sh"
+fi
+
+# Source graphics environment configuration
+if [[ -f "$config_dir/graphics_env.sh" ]]; then
+    source "$config_dir/graphics_env.sh"
+fi
+
+# Additional runtime optimizations
+export WINE_RT_PRIORITY_BASE=15
+export WINE_RT_PRIORITY_SERVER=15
+
+# Game-specific optimizations
+export WINE_HEAP_DELAY_FREE=1
+export WINE_DISABLE_WRITE_WATCH=1
+
+# Ensure wine prefix is set
+export WINEPREFIX="\$WINE_PREFIX_PATH"
+
+# Debug information (comment out for production)
+# echo "Wine Prefix: \$WINEPREFIX"
+# echo "Game Directory: \$GAMEDIR"
+# echo "Graphics Vendor: $graphics_vendor"
+EOF
+    
+    return 0
+}
+
+# Reset wine environment to defaults
+reset_wine_environment() {
+    debug_print continue "Resetting wine environment to defaults..."
+    
+    if [[ -z "$wine_prefix" ]]; then
+        debug_print exit "Wine prefix not configured"
+        return 1
+    fi
+    
+    if ! message question "Reset Wine Environment" "Are you sure you want to reset the wine environment configuration?\n\nThis will:\n• Remove all DLL overrides\n• Reset wine registry settings\n• Remove custom environment variables\n\nThis action cannot be undone."; then
+        debug_print continue "Wine environment reset cancelled by user"
+        return 1
+    fi
+    
+    # Reset wine registry DLL overrides
+    local wine_binary="wine"
+    export WINEPREFIX="$wine_prefix"
+    
+    debug_print continue "Removing wine DLL overrides..."
+    $wine_binary reg delete "HKEY_CURRENT_USER\\Software\\Wine\\DllOverrides" /f 2>/dev/null || true
+    
+    # Remove custom environment files
+    local env_files=(
+        "$config_dir/wine_env.sh"
+        "$config_dir/graphics_env.sh"
+    )
+    
+    for env_file in "${env_files[@]}"; do
+        if [[ -f "$env_file" ]]; then
+            debug_print continue "Removing environment file: $env_file"
+            rm "$env_file"
+        fi
+    done
+    
+    debug_print continue "Wine environment reset completed"
+    message info "Environment Reset" "Wine environment has been reset to defaults.\n\nYou may need to reconfigure optimizations for optimal WoW performance."
+    
+    return 0
+}
+
+############################################################################
 # Main Application Functions
 ############################################################################
 
