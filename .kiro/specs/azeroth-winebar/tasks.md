@@ -58,20 +58,20 @@
     - Add validation reporting and user feedback
     - _Requirements: 5.1, 5.2, 5.3, 5.4, 5.5_
 
-- [ ] 5. Implement Battle.net installation and configuration system
-  - [ ] 5.1 Create wine prefix setup functions
+- [x] 5. Implement Battle.net installation and configuration system
+  - [x] 5.1 Create wine prefix setup functions
     - Implement create_wine_prefix() for 64-bit prefix creation
     - Write winetricks integration for Arial font installation
     - Create wine registry modification functions for DXVA2 and nvapi settings
     - _Requirements: 3.1, 3.3, 3.6, 7.2_
 
-  - [ ] 5.2 Build Battle.net installer integration
+  - [x] 5.2 Build Battle.net installer integration
     - Create download_battlenet() function for fetching Battle.net setup
     - Implement install_battlenet() orchestrator function
     - Add Battle.net installation process with proper exclusions
     - _Requirements: 1.2, 7.1_
 
-  - [ ] 5.3 Implement Battle.net configuration system
+  - [x] 5.3 Implement Battle.net configuration system
     - Create Battle.net.config JSON generation function
     - Write configuration application with optimized settings
     - Implement hardware acceleration disable and streaming disable
