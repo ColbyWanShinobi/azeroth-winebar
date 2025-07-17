@@ -20,20 +20,20 @@
     - Implement menu_loop_done() for menu navigation control
     - _Requirements: 1.1, 6.1_
 
-- [ ] 3. Build wine runner management system with Proton Experimental support
-  - [ ] 3.1 Create wine runner download and installation functions
+- [x] 3. Build wine runner management system with Proton Experimental support
+  - [x] 3.1 Create wine runner download and installation functions
     - Implement runner source configuration with existing sources plus Proton Experimental
     - Write download_runner() function for fetching wine runners from GitHub releases
     - Create install_runner() function for extracting and setting up runners
     - _Requirements: 2.1, 2.3, 4.1_
 
-  - [ ] 3.2 Add Proton Experimental specific handling
+  - [x] 3.2 Add Proton Experimental specific handling
     - Implement get_proton_experimental() function for Steam Proton downloads
     - Create proton configuration and setup functions
     - Set Proton Experimental as default runner in configuration
     - _Requirements: 2.1, 2.2, 2.4_
 
-  - [ ] 3.3 Implement wine runner management interface
+  - [x] 3.3 Implement wine runner management interface
     - Create delete_runner() function for removing installed runners
     - Add runner selection and switching functionality
     - Implement wine version validation against requirements

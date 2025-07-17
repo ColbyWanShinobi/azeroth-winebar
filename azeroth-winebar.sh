@@ -500,6 +500,966 @@ menu_should_continue() {
 }
 
 ############################################################################
+# Wine Runner Management Functions
+############################################################################
+
+# Wine runner sources configuration
+declare -A wine_runner_sources=(
+    ["lutris-ge"]="https://api.github.com/repos/GloriousEggroll/wine-ge-custom/releases"
+    ["lutris-fshack"]="https://api.github.com/repos/GloriousEggroll/wine-ge-custom/releases"
+    ["wine-tkg"]="https://api.github.com/repos/Kron4ek/Wine-Builds/releases"
+    ["proton-ge"]="https://api.github.com/repos/GloriousEggroll/proton-ge-custom/releases"
+    ["proton-experimental"]="steam://proton-experimental"
+)
+
+# Wine runner installation directory
+wine_runners_dir="$HOME/.local/share/azeroth-winebar/runners"
+
+# Create wine runners directory
+setup_wine_runners_dir() {
+    debug_print continue "Setting up wine runners directory..."
+    
+    if [[ ! -d "$wine_runners_dir" ]]; then
+        if ! mkdir -p "$wine_runners_dir"; then
+            debug_print exit "Failed to create wine runners directory: $wine_runners_dir"
+            return 1
+        fi
+    fi
+    
+    debug_print continue "Wine runners directory ready: $wine_runners_dir"
+    return 0
+}
+
+# Get available wine runner releases from GitHub API
+get_runner_releases() {
+    local runner_type="$1"
+    local api_url="${wine_runner_sources[$runner_type]}"
+    
+    if [[ -z "$api_url" ]]; then
+        debug_print exit "Unknown wine runner type: $runner_type"
+        return 1
+    fi
+    
+    # Handle special case for Proton Experimental
+    if [[ "$runner_type" == "proton-experimental" ]]; then
+        echo "proton-experimental-latest"
+        return 0
+    fi
+    
+    debug_print continue "Fetching releases for $runner_type from $api_url"
+    
+    # Fetch releases from GitHub API
+    local releases_json
+    if ! releases_json=$(curl -s "$api_url"); then
+        debug_print exit "Failed to fetch releases for $runner_type"
+        return 1
+    fi
+    
+    # Parse release names and download URLs
+    local releases
+    case "$runner_type" in
+        "lutris-ge"|"lutris-fshack")
+            releases=$(echo "$releases_json" | grep -o '"tag_name": *"[^"]*"' | sed 's/"tag_name": *"\([^"]*\)"/\1/' | head -10)
+            ;;
+        "wine-tkg")
+            releases=$(echo "$releases_json" | grep -o '"tag_name": *"[^"]*"' | sed 's/"tag_name": *"\([^"]*\)"/\1/' | grep -E "^wine-" | head -10)
+            ;;
+        "proton-ge")
+            releases=$(echo "$releases_json" | grep -o '"tag_name": *"[^"]*"' | sed 's/"tag_name": *"\([^"]*\)"/\1/' | head -10)
+            ;;
+        *)
+            debug_print exit "Unsupported runner type for release parsing: $runner_type"
+            return 1
+            ;;
+    esac
+    
+    if [[ -z "$releases" ]]; then
+        debug_print exit "No releases found for $runner_type"
+        return 1
+    fi
+    
+    echo "$releases"
+    return 0
+}
+
+# Get download URL for a specific wine runner release
+get_runner_download_url() {
+    local runner_type="$1"
+    local release_tag="$2"
+    local api_url="${wine_runner_sources[$runner_type]}"
+    
+    if [[ -z "$api_url" || -z "$release_tag" ]]; then
+        debug_print exit "Missing parameters for download URL lookup"
+        return 1
+    fi
+    
+    # Handle special case for Proton Experimental
+    if [[ "$runner_type" == "proton-experimental" ]]; then
+        echo "steam://proton-experimental"
+        return 0
+    fi
+    
+    debug_print continue "Getting download URL for $runner_type $release_tag"
+    
+    # Fetch specific release data
+    local release_json
+    if ! release_json=$(curl -s "$api_url/tags/$release_tag"); then
+        debug_print exit "Failed to fetch release data for $release_tag"
+        return 1
+    fi
+    
+    # Extract download URL based on runner type
+    local download_url
+    case "$runner_type" in
+        "lutris-ge"|"lutris-fshack")
+            download_url=$(echo "$release_json" | grep -o '"browser_download_url": *"[^"]*\.tar\.xz"' | head -1 | sed 's/"browser_download_url": *"\([^"]*\)"/\1/')
+            ;;
+        "wine-tkg")
+            download_url=$(echo "$release_json" | grep -o '"browser_download_url": *"[^"]*\.tar\.xz"' | grep -E "(staging|tkg)" | head -1 | sed 's/"browser_download_url": *"\([^"]*\)"/\1/')
+            ;;
+        "proton-ge")
+            download_url=$(echo "$release_json" | grep -o '"browser_download_url": *"[^"]*\.tar\.gz"' | head -1 | sed 's/"browser_download_url": *"\([^"]*\)"/\1/')
+            ;;
+        *)
+            debug_print exit "Unsupported runner type for URL extraction: $runner_type"
+            return 1
+            ;;
+    esac
+    
+    if [[ -z "$download_url" ]]; then
+        debug_print exit "No download URL found for $runner_type $release_tag"
+        return 1
+    fi
+    
+    echo "$download_url"
+    return 0
+}
+
+# Download wine runner from URL
+download_runner() {
+    local download_url="$1"
+    local runner_name="$2"
+    local temp_dir="/tmp/azeroth-winebar-download"
+    
+    if [[ -z "$download_url" || -z "$runner_name" ]]; then
+        debug_print exit "Missing parameters for runner download"
+        return 1
+    fi
+    
+    # Handle special case for Proton Experimental
+    if [[ "$download_url" == "steam://proton-experimental" ]]; then
+        debug_print continue "Proton Experimental requires special handling - delegating to get_proton_experimental()"
+        return 2  # Special return code to indicate delegation needed
+    fi
+    
+    debug_print continue "Downloading wine runner: $runner_name"
+    debug_print continue "Download URL: $download_url"
+    
+    # Create temporary download directory
+    if ! mkdir -p "$temp_dir"; then
+        debug_print exit "Failed to create temporary download directory"
+        return 1
+    fi
+    
+    # Determine file extension and name
+    local file_extension
+    if [[ "$download_url" == *.tar.xz ]]; then
+        file_extension="tar.xz"
+    elif [[ "$download_url" == *.tar.gz ]]; then
+        file_extension="tar.gz"
+    else
+        debug_print exit "Unsupported archive format in URL: $download_url"
+        return 1
+    fi
+    
+    local download_file="$temp_dir/$runner_name.$file_extension"
+    
+    # Download the file with progress indication
+    debug_print continue "Downloading to: $download_file"
+    if ! curl -L -o "$download_file" "$download_url"; then
+        debug_print exit "Failed to download wine runner from $download_url"
+        rm -rf "$temp_dir"
+        return 1
+    fi
+    
+    # Verify download
+    if [[ ! -f "$download_file" ]]; then
+        debug_print exit "Downloaded file not found: $download_file"
+        rm -rf "$temp_dir"
+        return 1
+    fi
+    
+    local file_size
+    file_size=$(stat -c%s "$download_file" 2>/dev/null || echo "0")
+    if [[ "$file_size" -lt 1000000 ]]; then  # Less than 1MB is suspicious
+        debug_print exit "Downloaded file appears to be too small: $file_size bytes"
+        rm -rf "$temp_dir"
+        return 1
+    fi
+    
+    debug_print continue "Download completed successfully: $file_size bytes"
+    echo "$download_file"
+    return 0
+}
+
+# Install wine runner from downloaded archive
+install_runner() {
+    local archive_path="$1"
+    local runner_name="$2"
+    local runner_type="$3"
+    
+    if [[ -z "$archive_path" || -z "$runner_name" ]]; then
+        debug_print exit "Missing parameters for runner installation"
+        return 1
+    fi
+    
+    if [[ ! -f "$archive_path" ]]; then
+        debug_print exit "Archive file not found: $archive_path"
+        return 1
+    fi
+    
+    # Setup wine runners directory
+    if ! setup_wine_runners_dir; then
+        return 1
+    fi
+    
+    local install_dir="$wine_runners_dir/$runner_name"
+    
+    # Check if runner already exists
+    if [[ -d "$install_dir" ]]; then
+        debug_print continue "Wine runner already exists: $runner_name"
+        if ! message question "Runner Exists" "Wine runner '$runner_name' is already installed.\n\nDo you want to reinstall it?"; then
+            debug_print continue "Installation cancelled by user"
+            return 1
+        fi
+        
+        # Remove existing installation
+        debug_print continue "Removing existing installation: $install_dir"
+        if ! rm -rf "$install_dir"; then
+            debug_print exit "Failed to remove existing runner installation"
+            return 1
+        fi
+    fi
+    
+    debug_print continue "Installing wine runner: $runner_name"
+    debug_print continue "Installation directory: $install_dir"
+    
+    # Create installation directory
+    if ! mkdir -p "$install_dir"; then
+        debug_print exit "Failed to create installation directory: $install_dir"
+        return 1
+    fi
+    
+    # Extract archive based on file type
+    local extract_cmd
+    if [[ "$archive_path" == *.tar.xz ]]; then
+        extract_cmd="tar -xJf"
+    elif [[ "$archive_path" == *.tar.gz ]]; then
+        extract_cmd="tar -xzf"
+    else
+        debug_print exit "Unsupported archive format: $archive_path"
+        return 1
+    fi
+    
+    debug_print continue "Extracting archive with: $extract_cmd"
+    if ! $extract_cmd "$archive_path" -C "$install_dir" --strip-components=1; then
+        debug_print exit "Failed to extract wine runner archive"
+        rm -rf "$install_dir"
+        return 1
+    fi
+    
+    # Verify installation
+    local wine_binary
+    case "$runner_type" in
+        "proton-ge"|"proton-experimental")
+            wine_binary="$install_dir/bin/wine"
+            ;;
+        *)
+            wine_binary="$install_dir/bin/wine"
+            ;;
+    esac
+    
+    if [[ ! -f "$wine_binary" ]]; then
+        debug_print exit "Wine binary not found after installation: $wine_binary"
+        rm -rf "$install_dir"
+        return 1
+    fi
+    
+    # Make wine binary executable
+    if ! chmod +x "$wine_binary"; then
+        debug_print continue "Warning: Failed to make wine binary executable"
+    fi
+    
+    # Create runner info file
+    local info_file="$install_dir/.runner-info"
+    cat > "$info_file" << EOF
+RUNNER_NAME=$runner_name
+RUNNER_TYPE=$runner_type
+INSTALL_DATE=$(date -Iseconds)
+WINE_BINARY=$wine_binary
+EOF
+    
+    debug_print continue "Wine runner installed successfully: $runner_name"
+    message info "Installation Complete" "Wine runner '$runner_name' has been installed successfully.\n\nLocation: $install_dir"
+    
+    return 0
+}
+
+# List installed wine runners
+list_installed_runners() {
+    debug_print continue "Listing installed wine runners..."
+    
+    if [[ ! -d "$wine_runners_dir" ]]; then
+        debug_print continue "No wine runners directory found"
+        return 1
+    fi
+    
+    local runners=()
+    local runner_info=()
+    
+    # Find all installed runners
+    for runner_dir in "$wine_runners_dir"/*; do
+        if [[ -d "$runner_dir" ]]; then
+            local runner_name
+            runner_name=$(basename "$runner_dir")
+            
+            # Check if it has a valid wine binary
+            local wine_binary="$runner_dir/bin/wine"
+            if [[ -f "$wine_binary" ]]; then
+                runners+=("$runner_name")
+                
+                # Get runner type if available
+                local runner_type="unknown"
+                local info_file="$runner_dir/.runner-info"
+                if [[ -f "$info_file" ]]; then
+                    runner_type=$(grep "^RUNNER_TYPE=" "$info_file" | cut -d'=' -f2)
+                fi
+                
+                runner_info+=("$runner_name ($runner_type)")
+            fi
+        fi
+    done
+    
+    if [[ ${#runners[@]} -eq 0 ]]; then
+        debug_print continue "No installed wine runners found"
+        return 1
+    fi
+    
+    debug_print continue "Found ${#runners[@]} installed wine runners"
+    printf '%s\n' "${runner_info[@]}"
+    return 0
+}
+
+# Get wine runner binary path
+get_runner_binary() {
+    local runner_name="$1"
+    
+    if [[ -z "$runner_name" ]]; then
+        debug_print exit "No runner name specified"
+        return 1
+    fi
+    
+    local runner_dir="$wine_runners_dir/$runner_name"
+    local wine_binary="$runner_dir/bin/wine"
+    
+    if [[ -f "$wine_binary" ]]; then
+        echo "$wine_binary"
+        return 0
+    else
+        debug_print exit "Wine binary not found for runner: $runner_name"
+        return 1
+    fi
+}
+
+############################################################################
+# Proton Experimental Specific Functions
+############################################################################
+
+# Check if Steam is installed and find Steam directory
+find_steam_directory() {
+    debug_print continue "Looking for Steam installation..."
+    
+    # Common Steam installation paths
+    local steam_paths=(
+        "$HOME/.steam/steam"
+        "$HOME/.local/share/Steam"
+        "$HOME/.var/app/com.valvesoftware.Steam/.local/share/Steam"  # Flatpak
+        "/usr/share/steam"
+    )
+    
+    for steam_path in "${steam_paths[@]}"; do
+        if [[ -d "$steam_path" ]]; then
+            debug_print continue "Found Steam directory: $steam_path"
+            echo "$steam_path"
+            return 0
+        fi
+    done
+    
+    debug_print exit "Steam installation not found"
+    return 1
+}
+
+# Find Proton Experimental installation in Steam
+find_proton_experimental() {
+    local steam_dir
+    if ! steam_dir=$(find_steam_directory); then
+        return 1
+    fi
+    
+    debug_print continue "Searching for Proton Experimental in Steam directory..."
+    
+    # Look for Proton Experimental in Steam's compatibilitytools.d
+    local proton_paths=(
+        "$steam_dir/compatibilitytools.d/Proton-Experimental"
+        "$steam_dir/steamapps/common/Proton - Experimental"
+        "$steam_dir/steamapps/common/Proton Experimental"
+    )
+    
+    for proton_path in "${proton_paths[@]}"; do
+        if [[ -d "$proton_path" ]]; then
+            local proton_binary="$proton_path/proton"
+            if [[ -f "$proton_binary" ]]; then
+                debug_print continue "Found Proton Experimental: $proton_path"
+                echo "$proton_path"
+                return 0
+            fi
+        fi
+    done
+    
+    debug_print continue "Proton Experimental not found in Steam installation"
+    return 1
+}
+
+# Download and install Proton Experimental
+get_proton_experimental() {
+    debug_print continue "Setting up Proton Experimental..."
+    
+    # Check if Steam is available
+    local steam_dir
+    if ! steam_dir=$(find_steam_directory); then
+        message error "Steam Required" "Proton Experimental requires Steam to be installed.\n\nPlease install Steam first, then run Steam at least once to initialize it."
+        return 1
+    fi
+    
+    # Check if Proton Experimental is already available in Steam
+    local existing_proton
+    if existing_proton=$(find_proton_experimental); then
+        debug_print continue "Found existing Proton Experimental installation"
+        
+        # Create symlink in our runners directory
+        local runner_name="proton-experimental"
+        local runner_link="$wine_runners_dir/$runner_name"
+        
+        if ! setup_wine_runners_dir; then
+            return 1
+        fi
+        
+        # Remove existing symlink if it exists
+        if [[ -L "$runner_link" ]]; then
+            rm "$runner_link"
+        elif [[ -d "$runner_link" ]]; then
+            debug_print continue "Warning: Removing existing directory to create symlink"
+            rm -rf "$runner_link"
+        fi
+        
+        # Create symlink to Steam's Proton Experimental
+        if ln -s "$existing_proton" "$runner_link"; then
+            debug_print continue "Created symlink to Proton Experimental: $runner_link"
+            
+            # Create runner info file
+            local info_file="$runner_link/.runner-info"
+            cat > "$info_file" << EOF
+RUNNER_NAME=$runner_name
+RUNNER_TYPE=proton-experimental
+INSTALL_DATE=$(date -Iseconds)
+WINE_BINARY=$existing_proton/dist/bin/wine
+PROTON_BINARY=$existing_proton/proton
+STEAM_SOURCE=$existing_proton
+EOF
+            
+            # Set as default runner
+            set_default_runner "$runner_name"
+            
+            message info "Proton Experimental Ready" "Proton Experimental has been configured successfully.\n\nIt is now set as your default wine runner for optimal Battle.net and WoW compatibility."
+            return 0
+        else
+            debug_print exit "Failed to create symlink to Proton Experimental"
+            return 1
+        fi
+    fi
+    
+    # Proton Experimental not found - guide user to install it
+    message info "Install Proton Experimental" "Proton Experimental was not found in your Steam installation.\n\nTo install Proton Experimental:\n\n1. Open Steam\n2. Go to Steam > Settings > Compatibility\n3. Enable 'Enable Steam Play for all other titles'\n4. Select 'Proton Experimental' from the dropdown\n5. Restart Steam\n\nAfter installation, run this script again to configure Proton Experimental."
+    
+    # Offer to open Steam settings
+    if command_exists "steam"; then
+        if message question "Open Steam" "Would you like to open Steam now to install Proton Experimental?"; then
+            debug_print continue "Opening Steam for user to install Proton Experimental"
+            steam steam://open/settings/compatibility &
+        fi
+    fi
+    
+    return 1
+}
+
+# Configure Proton Experimental environment
+configure_proton_experimental() {
+    local runner_name="$1"
+    local wine_prefix="$2"
+    
+    if [[ -z "$runner_name" || -z "$wine_prefix" ]]; then
+        debug_print exit "Missing parameters for Proton Experimental configuration"
+        return 1
+    fi
+    
+    debug_print continue "Configuring Proton Experimental environment..."
+    
+    local runner_dir="$wine_runners_dir/$runner_name"
+    if [[ ! -d "$runner_dir" ]]; then
+        debug_print exit "Proton Experimental runner not found: $runner_dir"
+        return 1
+    fi
+    
+    # Set Proton-specific environment variables
+    export STEAM_COMPAT_DATA_PATH="$wine_prefix"
+    export STEAM_COMPAT_CLIENT_INSTALL_PATH="$runner_dir"
+    export PROTON_USE_WINE3D=1
+    export PROTON_NO_ESYNC=0
+    export PROTON_NO_FSYNC=0
+    export PROTON_FORCE_LARGE_ADDRESS_AWARE=1
+    
+    # Additional Proton optimizations for Battle.net/WoW
+    export PROTON_ENABLE_NVAPI=0  # Disable NVAPI for stability
+    export PROTON_HIDE_NVIDIA_GPU=0
+    export PROTON_USE_WINED3D=0  # Use DXVK instead of WineD3D
+    
+    debug_print continue "Proton Experimental environment configured"
+    return 0
+}
+
+# Set default wine runner in configuration
+set_default_runner() {
+    local runner_name="$1"
+    
+    if [[ -z "$runner_name" ]]; then
+        debug_print exit "No runner name specified for default setting"
+        return 1
+    fi
+    
+    local config_file="$config_dir/default-runner.conf"
+    
+    if echo "$runner_name" > "$config_file"; then
+        debug_print continue "Default wine runner set to: $runner_name"
+        return 0
+    else
+        debug_print exit "Failed to save default runner configuration"
+        return 1
+    fi
+}
+
+# Get default wine runner from configuration
+get_default_runner() {
+    local config_file="$config_dir/default-runner.conf"
+    
+    if [[ -f "$config_file" ]]; then
+        local default_runner
+        default_runner="$(cat "$config_file" 2>/dev/null)"
+        if [[ -n "$default_runner" ]]; then
+            echo "$default_runner"
+            return 0
+        fi
+    fi
+    
+    # Default to Proton Experimental if no configuration exists
+    echo "proton-experimental"
+    return 0
+}
+
+# Validate Proton Experimental installation
+validate_proton_experimental() {
+    local runner_name="$1"
+    
+    if [[ -z "$runner_name" ]]; then
+        runner_name="proton-experimental"
+    fi
+    
+    local runner_dir="$wine_runners_dir/$runner_name"
+    
+    if [[ ! -d "$runner_dir" ]]; then
+        debug_print continue "Proton Experimental not installed: $runner_name"
+        return 1
+    fi
+    
+    # Check for Proton binary
+    local proton_binary="$runner_dir/proton"
+    if [[ ! -f "$proton_binary" ]]; then
+        debug_print continue "Proton binary not found: $proton_binary"
+        return 1
+    fi
+    
+    # Check for wine binary in dist directory
+    local wine_binary="$runner_dir/dist/bin/wine"
+    if [[ ! -f "$wine_binary" ]]; then
+        debug_print continue "Wine binary not found in Proton installation: $wine_binary"
+        return 1
+    fi
+    
+    debug_print continue "Proton Experimental validation successful: $runner_name"
+    return 0
+}
+
+############################################################################
+# Wine Runner Management Interface Functions
+############################################################################
+
+# Delete/remove an installed wine runner
+delete_runner() {
+    local runner_name="$1"
+    
+    if [[ -z "$runner_name" ]]; then
+        debug_print exit "No runner name specified for deletion"
+        return 1
+    fi
+    
+    local runner_dir="$wine_runners_dir/$runner_name"
+    
+    if [[ ! -d "$runner_dir" ]]; then
+        debug_print exit "Wine runner not found: $runner_name"
+        message error "Runner Not Found" "Wine runner '$runner_name' is not installed."
+        return 1
+    fi
+    
+    # Confirm deletion
+    if ! message question "Delete Wine Runner" "Are you sure you want to delete wine runner '$runner_name'?\n\nThis action cannot be undone."; then
+        debug_print continue "Runner deletion cancelled by user"
+        return 1
+    fi
+    
+    debug_print continue "Deleting wine runner: $runner_name"
+    
+    # Check if this is the default runner
+    local current_default
+    current_default=$(get_default_runner)
+    if [[ "$current_default" == "$runner_name" ]]; then
+        debug_print continue "Deleting default runner, will reset to proton-experimental"
+        set_default_runner "proton-experimental"
+    fi
+    
+    # Remove the runner directory
+    if rm -rf "$runner_dir"; then
+        debug_print continue "Wine runner deleted successfully: $runner_name"
+        message info "Runner Deleted" "Wine runner '$runner_name' has been deleted successfully."
+        return 0
+    else
+        debug_print exit "Failed to delete wine runner: $runner_name"
+        message error "Deletion Failed" "Failed to delete wine runner '$runner_name'.\n\nCheck permissions and try again."
+        return 1
+    fi
+}
+
+# Select and switch wine runner
+select_runner() {
+    debug_print continue "Starting wine runner selection..."
+    
+    # Get list of installed runners
+    local runners_output
+    if ! runners_output=$(list_installed_runners); then
+        message info "No Runners" "No wine runners are currently installed.\n\nWould you like to install Proton Experimental?"
+        if message question "Install Proton Experimental" "Install Proton Experimental as your default wine runner?"; then
+            get_proton_experimental
+        fi
+        return 1
+    fi
+    
+    # Parse runners into array
+    local runners=()
+    while IFS= read -r line; do
+        if [[ -n "$line" ]]; then
+            runners+=("$line")
+        fi
+    done <<< "$runners_output"
+    
+    if [[ ${#runners[@]} -eq 0 ]]; then
+        message info "No Runners" "No wine runners found."
+        return 1
+    fi
+    
+    # Get current default runner
+    local current_default
+    current_default=$(get_default_runner)
+    
+    # Show current default
+    message info "Current Default" "Current default wine runner: $current_default"
+    
+    # Display runner selection menu
+    local selection
+    selection=$(menu "Select Wine Runner" "Choose a wine runner to set as default:" "${runners[@]}")
+    
+    if [[ $? -ne 0 || -z "$selection" ]]; then
+        debug_print continue "Runner selection cancelled"
+        return 1
+    fi
+    
+    # Extract runner name from selection (remove type info in parentheses)
+    local selected_runner
+    selected_runner=$(echo "${runners[$((selection-1))]}" | sed 's/ (.*//')
+    
+    if [[ -z "$selected_runner" ]]; then
+        debug_print exit "Failed to parse selected runner name"
+        return 1
+    fi
+    
+    # Set as default runner
+    if set_default_runner "$selected_runner"; then
+        message info "Runner Selected" "Wine runner '$selected_runner' is now set as the default."
+        return 0
+    else
+        message error "Selection Failed" "Failed to set '$selected_runner' as the default wine runner."
+        return 1
+    fi
+}
+
+# Install wine runner workflow
+install_runner_workflow() {
+    debug_print continue "Starting wine runner installation workflow..."
+    
+    # Show available runner types
+    local runner_types=("Proton Experimental (Recommended)" "Lutris GE" "Proton GE" "Wine TKG")
+    local selection
+    selection=$(menu "Select Runner Type" "Choose the type of wine runner to install:" "${runner_types[@]}")
+    
+    if [[ $? -ne 0 || -z "$selection" ]]; then
+        debug_print continue "Runner type selection cancelled"
+        return 1
+    fi
+    
+    local runner_type
+    case "$selection" in
+        1)
+            runner_type="proton-experimental"
+            ;;
+        2)
+            runner_type="lutris-ge"
+            ;;
+        3)
+            runner_type="proton-ge"
+            ;;
+        4)
+            runner_type="wine-tkg"
+            ;;
+        *)
+            debug_print exit "Invalid runner type selection: $selection"
+            return 1
+            ;;
+    esac
+    
+    # Handle Proton Experimental specially
+    if [[ "$runner_type" == "proton-experimental" ]]; then
+        get_proton_experimental
+        return $?
+    fi
+    
+    # Get available releases for the selected type
+    debug_print continue "Fetching available releases for $runner_type..."
+    local releases
+    if ! releases=$(get_runner_releases "$runner_type"); then
+        message error "Fetch Failed" "Failed to fetch available releases for $runner_type.\n\nCheck your internet connection and try again."
+        return 1
+    fi
+    
+    # Convert releases to array
+    local releases_array=()
+    while IFS= read -r line; do
+        if [[ -n "$line" ]]; then
+            releases_array+=("$line")
+        fi
+    done <<< "$releases"
+    
+    if [[ ${#releases_array[@]} -eq 0 ]]; then
+        message error "No Releases" "No releases found for $runner_type."
+        return 1
+    fi
+    
+    # Show release selection menu
+    local release_selection
+    release_selection=$(menu "Select Release" "Choose a release to install:" "${releases_array[@]}")
+    
+    if [[ $? -ne 0 || -z "$release_selection" ]]; then
+        debug_print continue "Release selection cancelled"
+        return 1
+    fi
+    
+    local selected_release="${releases_array[$((release_selection-1))]}"
+    
+    # Get download URL
+    debug_print continue "Getting download URL for $selected_release..."
+    local download_url
+    if ! download_url=$(get_runner_download_url "$runner_type" "$selected_release"); then
+        message error "URL Failed" "Failed to get download URL for $selected_release."
+        return 1
+    fi
+    
+    # Download the runner
+    debug_print continue "Downloading $selected_release..."
+    message info "Downloading" "Downloading $selected_release...\n\nThis may take a few minutes depending on your internet connection."
+    
+    local downloaded_file
+    if ! downloaded_file=$(download_runner "$download_url" "$selected_release"); then
+        message error "Download Failed" "Failed to download $selected_release.\n\nCheck your internet connection and try again."
+        return 1
+    fi
+    
+    # Install the runner
+    debug_print continue "Installing $selected_release..."
+    message info "Installing" "Installing $selected_release...\n\nThis may take a few minutes."
+    
+    if install_runner "$downloaded_file" "$selected_release" "$runner_type"; then
+        # Clean up downloaded file
+        rm -f "$downloaded_file"
+        
+        # Ask if user wants to set as default
+        if message question "Set as Default" "Would you like to set '$selected_release' as your default wine runner?"; then
+            set_default_runner "$selected_release"
+        fi
+        
+        return 0
+    else
+        # Clean up downloaded file on failure
+        rm -f "$downloaded_file"
+        return 1
+    fi
+}
+
+# Validate wine version against requirements
+validate_wine_version() {
+    local runner_name="$1"
+    local min_version="${2:-6.0}"  # Default minimum version
+    
+    if [[ -z "$runner_name" ]]; then
+        debug_print exit "No runner name specified for version validation"
+        return 1
+    fi
+    
+    local wine_binary
+    if ! wine_binary=$(get_runner_binary "$runner_name"); then
+        debug_print exit "Failed to get wine binary for runner: $runner_name"
+        return 1
+    fi
+    
+    # Get wine version
+    local wine_version
+    if ! wine_version=$("$wine_binary" --version 2>/dev/null); then
+        debug_print exit "Failed to get wine version from: $wine_binary"
+        return 1
+    fi
+    
+    debug_print continue "Wine version for $runner_name: $wine_version"
+    
+    # Extract version number (handle different formats)
+    local version_number
+    if [[ "$wine_version" =~ wine-([0-9]+\.[0-9]+) ]]; then
+        version_number="${BASH_REMATCH[1]}"
+    elif [[ "$wine_version" =~ ([0-9]+\.[0-9]+) ]]; then
+        version_number="${BASH_REMATCH[1]}"
+    else
+        debug_print continue "Warning: Could not parse wine version: $wine_version"
+        return 0  # Assume valid if we can't parse
+    fi
+    
+    # Compare versions (simple numeric comparison)
+    if [[ $(echo "$version_number >= $min_version" | bc -l 2>/dev/null) == "1" ]]; then
+        debug_print continue "Wine version validation passed: $version_number >= $min_version"
+        return 0
+    else
+        debug_print continue "Wine version validation failed: $version_number < $min_version"
+        return 1
+    fi
+}
+
+# Wine runner management main menu
+manage_wine_runners() {
+    debug_print continue "Starting wine runner management..."
+    
+    local management_options=(
+        "Install Wine Runner"
+        "Select Default Runner"
+        "List Installed Runners"
+        "Delete Wine Runner"
+        "Install Proton Experimental"
+        "Validate Current Runner"
+    )
+    
+    while menu_should_continue; do
+        local selection
+        selection=$(menu "Wine Runner Management" "Manage your wine runners for optimal WoW performance:" "${management_options[@]}")
+        
+        if [[ $? -ne 0 || -z "$selection" ]]; then
+            debug_print continue "Wine runner management menu cancelled"
+            break
+        fi
+        
+        case "$selection" in
+            1)
+                install_runner_workflow
+                ;;
+            2)
+                select_runner
+                ;;
+            3)
+                local runners_list
+                if runners_list=$(list_installed_runners); then
+                    message info "Installed Runners" "Currently installed wine runners:\n\n$runners_list"
+                else
+                    message info "No Runners" "No wine runners are currently installed."
+                fi
+                ;;
+            4)
+                # Get list of runners for deletion
+                local runners_output
+                if runners_output=$(list_installed_runners); then
+                    local runners=()
+                    while IFS= read -r line; do
+                        if [[ -n "$line" ]]; then
+                            local runner_name
+                            runner_name=$(echo "$line" | sed 's/ (.*//')
+                            runners+=("$runner_name")
+                        fi
+                    done <<< "$runners_output"
+                    
+                    if [[ ${#runners[@]} -gt 0 ]]; then
+                        local delete_selection
+                        delete_selection=$(menu "Delete Runner" "Select a wine runner to delete:" "${runners[@]}")
+                        
+                        if [[ $? -eq 0 && -n "$delete_selection" ]]; then
+                            delete_runner "${runners[$((delete_selection-1))]}"
+                        fi
+                    fi
+                else
+                    message info "No Runners" "No wine runners are currently installed."
+                fi
+                ;;
+            5)
+                get_proton_experimental
+                ;;
+            6)
+                local current_runner
+                current_runner=$(get_default_runner)
+                if validate_wine_version "$current_runner"; then
+                    message info "Validation Passed" "Current wine runner '$current_runner' meets the minimum requirements."
+                else
+                    message error "Validation Failed" "Current wine runner '$current_runner' may not meet the minimum requirements.\n\nConsider upgrading to a newer version."
+                fi
+                ;;
+            *)
+                debug_print exit "Invalid wine runner management selection: $selection"
+                ;;
+        esac
+    done
+    
+    debug_print continue "Wine runner management completed"
+}
+
+############################################################################
 # Main Application Functions
 ############################################################################
 
