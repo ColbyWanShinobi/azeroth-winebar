@@ -1109,6 +1109,445 @@ validate_proton_experimental() {
 }
 
 ############################################################################
+# System Optimization and Preflight Check Functions
+############################################################################
+
+# Check vm.max_map_count setting
+check_map_count() {
+    debug_print continue "Checking vm.max_map_count setting..."
+    
+    local current_map_count
+    local required_map_count=16777216
+    
+    # Get current vm.max_map_count value
+    if [[ -r /proc/sys/vm/max_map_count ]]; then
+        current_map_count=$(cat /proc/sys/vm/max_map_count 2>/dev/null)
+    else
+        debug_print exit "Unable to read vm.max_map_count from /proc/sys/vm/max_map_count"
+        return 1
+    fi
+    
+    if [[ -z "$current_map_count" ]]; then
+        debug_print exit "Failed to get current vm.max_map_count value"
+        return 1
+    fi
+    
+    debug_print continue "Current vm.max_map_count: $current_map_count"
+    debug_print continue "Required vm.max_map_count: $required_map_count"
+    
+    # Check if current value meets requirement
+    if [[ "$current_map_count" -ge "$required_map_count" ]]; then
+        debug_print continue "vm.max_map_count check passed"
+        return 0
+    else
+        debug_print continue "vm.max_map_count check failed: $current_map_count < $required_map_count"
+        return 1
+    fi
+}
+
+# Check file descriptor limits
+check_file_limits() {
+    debug_print continue "Checking file descriptor limits..."
+    
+    local current_hard_limit
+    local required_hard_limit=524288
+    
+    # Get current hard limit for open files
+    current_hard_limit=$(ulimit -Hn 2>/dev/null)
+    
+    if [[ -z "$current_hard_limit" ]]; then
+        debug_print exit "Failed to get current hard file descriptor limit"
+        return 1
+    fi
+    
+    # Handle "unlimited" case
+    if [[ "$current_hard_limit" == "unlimited" ]]; then
+        debug_print continue "File descriptor hard limit is unlimited (passed)"
+        return 0
+    fi
+    
+    debug_print continue "Current hard file descriptor limit: $current_hard_limit"
+    debug_print continue "Required hard file descriptor limit: $required_hard_limit"
+    
+    # Check if current value meets requirement
+    if [[ "$current_hard_limit" -ge "$required_hard_limit" ]]; then
+        debug_print continue "File descriptor limit check passed"
+        return 0
+    else
+        debug_print continue "File descriptor limit check failed: $current_hard_limit < $required_hard_limit"
+        return 1
+    fi
+}
+
+# Check memory requirements (RAM and swap)
+check_memory() {
+    debug_print continue "Checking memory requirements..."
+    
+    local required_ram_gb=16
+    local required_total_gb=40
+    
+    # Get memory information from /proc/meminfo
+    if [[ ! -r /proc/meminfo ]]; then
+        debug_print exit "Unable to read /proc/meminfo"
+        return 1
+    fi
+    
+    local mem_total_kb
+    local swap_total_kb
+    
+    # Extract memory values (in KB)
+    mem_total_kb=$(grep "^MemTotal:" /proc/meminfo | awk '{print $2}')
+    swap_total_kb=$(grep "^SwapTotal:" /proc/meminfo | awk '{print $2}')
+    
+    if [[ -z "$mem_total_kb" ]]; then
+        debug_print exit "Failed to get total RAM from /proc/meminfo"
+        return 1
+    fi
+    
+    # Convert to GB (1 GB = 1024^3 bytes = 1048576 KB)
+    local mem_total_gb=$((mem_total_kb / 1048576))
+    local swap_total_gb=0
+    
+    if [[ -n "$swap_total_kb" && "$swap_total_kb" -gt 0 ]]; then
+        swap_total_gb=$((swap_total_kb / 1048576))
+    fi
+    
+    local total_memory_gb=$((mem_total_gb + swap_total_gb))
+    
+    debug_print continue "Total RAM: ${mem_total_gb}GB"
+    debug_print continue "Total Swap: ${swap_total_gb}GB"
+    debug_print continue "Total Memory (RAM + Swap): ${total_memory_gb}GB"
+    debug_print continue "Required RAM: ${required_ram_gb}GB"
+    debug_print continue "Required Total Memory: ${required_total_gb}GB"
+    
+    local ram_check_passed=0
+    local total_check_passed=0
+    
+    # Check RAM requirement
+    if [[ "$mem_total_gb" -ge "$required_ram_gb" ]]; then
+        debug_print continue "RAM requirement check passed"
+        ram_check_passed=1
+    else
+        debug_print continue "RAM requirement check failed: ${mem_total_gb}GB < ${required_ram_gb}GB"
+    fi
+    
+    # Check total memory requirement
+    if [[ "$total_memory_gb" -ge "$required_total_gb" ]]; then
+        debug_print continue "Total memory requirement check passed"
+        total_check_passed=1
+    else
+        debug_print continue "Total memory requirement check failed: ${total_memory_gb}GB < ${required_total_gb}GB"
+    fi
+    
+    # Return success only if both checks pass
+    if [[ "$ram_check_passed" -eq 1 && "$total_check_passed" -eq 1 ]]; then
+        return 0
+    else
+        return 1
+    fi
+}
+
+# Execute command with appropriate privileges (root/user)
+try_exec() {
+    local command="$1"
+    local description="$2"
+    local use_sudo="${3:-true}"
+    
+    if [[ -z "$command" ]]; then
+        debug_print exit "No command specified for try_exec"
+        return 1
+    fi
+    
+    debug_print continue "Executing: $description"
+    debug_print continue "Command: $command"
+    
+    # Try to execute the command
+    if [[ "$use_sudo" == "true" ]]; then
+        # Check if we need sudo
+        if [[ $EUID -eq 0 ]]; then
+            # Already running as root
+            debug_print continue "Running as root, executing directly"
+            if eval "$command"; then
+                debug_print continue "Command executed successfully"
+                return 0
+            else
+                debug_print exit "Command failed: $command"
+                return 1
+            fi
+        else
+            # Need to use sudo
+            debug_print continue "Using sudo for privilege escalation"
+            
+            # Check if sudo is available
+            if ! command_exists "sudo"; then
+                debug_print exit "sudo is required but not available"
+                message error "Sudo Required" "This operation requires administrative privileges, but sudo is not available.\n\nPlease install sudo or run as root."
+                return 1
+            fi
+            
+            # Check if polkit is available for GUI sudo prompts
+            if command_exists "pkexec"; then
+                debug_print continue "Using pkexec for GUI privilege escalation"
+                if pkexec bash -c "$command"; then
+                    debug_print continue "Command executed successfully with pkexec"
+                    return 0
+                else
+                    debug_print continue "pkexec failed, trying sudo"
+                fi
+            fi
+            
+            # Use regular sudo
+            if sudo bash -c "$command"; then
+                debug_print continue "Command executed successfully with sudo"
+                return 0
+            else
+                debug_print exit "Command failed with sudo: $command"
+                return 1
+            fi
+        fi
+    else
+        # Execute without sudo
+        debug_print continue "Executing without privilege escalation"
+        if eval "$command"; then
+            debug_print continue "Command executed successfully"
+            return 0
+        else
+            debug_print exit "Command failed: $command"
+            return 1
+        fi
+    fi
+}
+
+# Fix vm.max_map_count setting
+fix_map_count() {
+    debug_print continue "Fixing vm.max_map_count setting..."
+    
+    local required_map_count=16777216
+    local sysctl_conf="/etc/sysctl.conf"
+    local sysctl_d_file="/etc/sysctl.d/99-azeroth-winebar.conf"
+    
+    # First, set the current runtime value
+    local set_runtime_cmd="sysctl -w vm.max_map_count=$required_map_count"
+    if ! try_exec "$set_runtime_cmd" "Setting runtime vm.max_map_count"; then
+        debug_print exit "Failed to set runtime vm.max_map_count"
+        return 1
+    fi
+    
+    # Make the change persistent
+    debug_print continue "Making vm.max_map_count change persistent..."
+    
+    # Create sysctl.d configuration file (preferred method)
+    local create_sysctl_cmd="echo 'vm.max_map_count=$required_map_count' > '$sysctl_d_file'"
+    if try_exec "$create_sysctl_cmd" "Creating persistent sysctl configuration"; then
+        debug_print continue "Created persistent configuration: $sysctl_d_file"
+    else
+        # Fallback to modifying /etc/sysctl.conf
+        debug_print continue "Fallback: Adding to $sysctl_conf"
+        
+        # Check if the setting already exists in sysctl.conf
+        local check_existing_cmd="grep -q '^vm.max_map_count' '$sysctl_conf'"
+        if try_exec "$check_existing_cmd" "Checking existing sysctl.conf entry" false; then
+            # Update existing entry
+            local update_cmd="sed -i 's/^vm.max_map_count.*/vm.max_map_count=$required_map_count/' '$sysctl_conf'"
+            if ! try_exec "$update_cmd" "Updating existing sysctl.conf entry"; then
+                debug_print exit "Failed to update sysctl.conf"
+                return 1
+            fi
+        else
+            # Add new entry
+            local append_cmd="echo 'vm.max_map_count=$required_map_count' >> '$sysctl_conf'"
+            if ! try_exec "$append_cmd" "Adding new sysctl.conf entry"; then
+                debug_print exit "Failed to add entry to sysctl.conf"
+                return 1
+            fi
+        fi
+    fi
+    
+    # Verify the fix
+    if check_map_count; then
+        debug_print continue "vm.max_map_count fix applied successfully"
+        message info "System Optimization" "vm.max_map_count has been set to $required_map_count.\n\nThis change will persist after reboot."
+        return 0
+    else
+        debug_print exit "vm.max_map_count fix verification failed"
+        return 1
+    fi
+}
+
+# Fix file descriptor limits
+fix_file_limits() {
+    debug_print continue "Fixing file descriptor limits..."
+    
+    local required_hard_limit=524288
+    local limits_conf="/etc/security/limits.conf"
+    local limits_d_file="/etc/security/limits.d/99-azeroth-winebar.conf"
+    
+    # Create limits.d configuration file (preferred method)
+    debug_print continue "Creating persistent limits configuration..."
+    
+    local limits_content="# Azeroth Winebar - File descriptor limits for WoW
+* soft nofile $required_hard_limit
+* hard nofile $required_hard_limit
+root soft nofile $required_hard_limit
+root hard nofile $required_hard_limit"
+    
+    local create_limits_cmd="cat > '$limits_d_file' << 'EOF'
+$limits_content
+EOF"
+    
+    if try_exec "$create_limits_cmd" "Creating persistent limits configuration"; then
+        debug_print continue "Created persistent limits configuration: $limits_d_file"
+    else
+        # Fallback to modifying /etc/security/limits.conf
+        debug_print continue "Fallback: Adding to $limits_conf"
+        
+        # Check if our entries already exist
+        local check_existing_cmd="grep -q 'Azeroth Winebar' '$limits_conf'"
+        if ! try_exec "$check_existing_cmd" "Checking existing limits.conf entries" false; then
+            # Add new entries
+            local append_cmd="cat >> '$limits_conf' << 'EOF'
+
+# Azeroth Winebar - File descriptor limits for WoW
+* soft nofile $required_hard_limit
+* hard nofile $required_hard_limit
+root soft nofile $required_hard_limit
+root hard nofile $required_hard_limit
+EOF"
+            if ! try_exec "$append_cmd" "Adding new limits.conf entries"; then
+                debug_print exit "Failed to add entries to limits.conf"
+                return 1
+            fi
+        else
+            debug_print continue "Limits configuration already exists in limits.conf"
+        fi
+    fi
+    
+    debug_print continue "File descriptor limits configuration applied"
+    message info "System Optimization" "File descriptor limits have been configured.\n\nYou may need to log out and log back in for the changes to take effect.\n\nNew limit: $required_hard_limit"
+    
+    return 0
+}
+
+# Comprehensive preflight check system
+preflight_check() {
+    debug_print continue "Starting comprehensive preflight check..."
+    
+    local checks_passed=0
+    local checks_failed=0
+    local failed_checks=()
+    local check_results=()
+    
+    # Initialize check results
+    check_results+=("=== Azeroth Winebar System Preflight Check ===")
+    check_results+=("")
+    
+    # Check 1: vm.max_map_count
+    debug_print continue "Running vm.max_map_count check..."
+    if check_map_count; then
+        check_results+=("✓ vm.max_map_count: PASSED")
+        ((checks_passed++))
+    else
+        check_results+=("✗ vm.max_map_count: FAILED")
+        failed_checks+=("map_count")
+        ((checks_failed++))
+    fi
+    
+    # Check 2: File descriptor limits
+    debug_print continue "Running file descriptor limits check..."
+    if check_file_limits; then
+        check_results+=("✓ File descriptor limits: PASSED")
+        ((checks_passed++))
+    else
+        check_results+=("✗ File descriptor limits: FAILED")
+        failed_checks+=("file_limits")
+        ((checks_failed++))
+    fi
+    
+    # Check 3: Memory requirements
+    debug_print continue "Running memory requirements check..."
+    if check_memory; then
+        check_results+=("✓ Memory requirements: PASSED")
+        ((checks_passed++))
+    else
+        check_results+=("✗ Memory requirements: FAILED")
+        failed_checks+=("memory")
+        ((checks_failed++))
+    fi
+    
+    # Add summary to results
+    check_results+=("")
+    check_results+=("=== Summary ===")
+    check_results+=("Checks passed: $checks_passed")
+    check_results+=("Checks failed: $checks_failed")
+    
+    # Display results
+    local results_text
+    printf -v results_text '%s\n' "${check_results[@]}"
+    
+    if [[ $checks_failed -eq 0 ]]; then
+        debug_print continue "All preflight checks passed"
+        message info "Preflight Check Complete" "$results_text\n\nAll system optimizations are properly configured!"
+        return 0
+    else
+        debug_print continue "Some preflight checks failed: ${failed_checks[*]}"
+        
+        # Ask user if they want to apply fixes
+        local fix_message="$results_text\n\nSome system optimizations are missing or incorrectly configured.\n\nWould you like to apply the necessary fixes automatically?"
+        
+        if message question "System Optimization Required" "$fix_message"; then
+            debug_print continue "User chose to apply fixes"
+            
+            local fixes_applied=0
+            local fixes_failed=0
+            
+            # Apply fixes for failed checks
+            for failed_check in "${failed_checks[@]}"; do
+                case "$failed_check" in
+                    "map_count")
+                        debug_print continue "Applying vm.max_map_count fix..."
+                        if fix_map_count; then
+                            ((fixes_applied++))
+                        else
+                            ((fixes_failed++))
+                        fi
+                        ;;
+                    "file_limits")
+                        debug_print continue "Applying file descriptor limits fix..."
+                        if fix_file_limits; then
+                            ((fixes_applied++))
+                        else
+                            ((fixes_failed++))
+                        fi
+                        ;;
+                    "memory")
+                        debug_print continue "Memory requirements cannot be automatically fixed"
+                        message info "Memory Requirements" "Your system does not meet the memory requirements:\n\n• Minimum 16GB RAM\n• Minimum 40GB total memory (RAM + Swap)\n\nConsider adding more RAM or increasing swap space."
+                        ((fixes_failed++))
+                        ;;
+                    *)
+                        debug_print continue "Unknown failed check: $failed_check"
+                        ((fixes_failed++))
+                        ;;
+                esac
+            done
+            
+            # Report fix results
+            if [[ $fixes_failed -eq 0 ]]; then
+                message info "Fixes Applied" "All system optimizations have been applied successfully!\n\nFixes applied: $fixes_applied\n\nYour system is now optimized for World of Warcraft."
+                return 0
+            else
+                message info "Partial Success" "Some fixes were applied successfully, but others require manual attention.\n\nFixes applied: $fixes_applied\nFixes failed: $fixes_failed\n\nPlease review the failed items manually."
+                return 1
+            fi
+        else
+            debug_print continue "User chose not to apply fixes"
+            message info "Preflight Check" "System optimization fixes were not applied.\n\nYou can run the preflight check again later to apply these optimizations."
+            return 1
+        fi
+    fi
+}
+
+############################################################################
 # Wine Runner Management Interface Functions
 ############################################################################
 
