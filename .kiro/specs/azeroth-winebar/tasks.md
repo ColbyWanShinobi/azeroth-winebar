@@ -7,14 +7,14 @@
   - Create basic debug_print and message functions for user communication
   - _Requirements: 1.1, 1.4, 6.2, 6.3_
 
-- [ ] 2. Implement core utility functions and menu system
-  - [ ] 2.1 Create configuration management functions
+- [x] 2. Implement core utility functions and menu system
+  - [x] 2.1 Create configuration management functions
     - Write getdirs() function to handle wine prefix and game directory paths
     - Implement config file reading/writing for persistent settings
     - Add directory validation and error handling
     - _Requirements: 1.1, 4.2_
 
-  - [ ] 2.2 Implement menu display system
+  - [x] 2.2 Implement menu display system
     - Create menu() function supporting both Zenity GUI and terminal modes
     - Add message() function for user dialogs and notifications
     - Implement menu_loop_done() for menu navigation control
