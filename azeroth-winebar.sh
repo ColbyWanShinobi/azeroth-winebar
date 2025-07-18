@@ -5044,14 +5044,31 @@ show_help() {
     echo "Usage: $0 [OPTIONS]"
     echo
     echo "Options:"
-    echo "  -h, --help     Show this help message"
-    echo "  -v, --version  Show version information"
-    echo "  -d, --debug    Enable debug output"
+    echo "  -h, --help           Show this help message"
+    echo "  -v, --version        Show version information"
+    echo "  -d, --debug          Enable debug output"
+    echo
+    echo "Direct Actions:"
+    echo "  --install            Install Battle.net and World of Warcraft"
+    echo "  --runners            Manage wine runners"
+    echo "  --preflight          Run system optimization checks"
+    echo "  --launch             Launch World of Warcraft"
+    echo "  --maintenance        Open maintenance and troubleshooting tools"
+    echo "  --settings           Open settings and configuration"
+    echo "  --reset-config       Reset configuration to defaults"
+    echo "  --list-runners       List installed wine runners"
+    echo "  --wine-shell         Open wine shell for debugging"
+    echo "  --winecfg            Open wine configuration"
     echo
     echo "$script_name is a helper script for managing World of Warcraft"
     echo "and Battle.net on Linux systems using wine/Proton Experimental."
     echo
-    echo "Run without arguments to start the interactive menu."
+    echo "Examples:"
+    echo "  $0                   Start interactive menu"
+    echo "  $0 --install         Install Battle.net directly"
+    echo "  $0 --preflight       Run system checks"
+    echo "  $0 --list-runners    Show installed wine runners"
+    echo "  $0 -d --launch       Launch WoW with debug output"
 }
 
 # Initialize the application
@@ -5077,8 +5094,436 @@ initialize() {
     return 0
 }
 
+############################################################################
+# Main Menu System
+############################################################################
+
+# Main menu options array with azeroth-winebar branding
+main_menu_options=(
+    "Install Battle.net and World of Warcraft"
+    "Manage Wine Runners"
+    "System Optimization and Preflight Checks"
+    "Battle.net and WoW Configuration"
+    "Launch World of Warcraft"
+    "Maintenance and Troubleshooting"
+    "Settings and Configuration"
+    "Help and Information"
+    "Exit Azeroth Winebar"
+)
+
+# Main menu action functions
+main_menu_install_battlenet() {
+    debug_print continue "Starting Battle.net installation process..."
+    message info "Battle.net Installation" "This will guide you through installing Battle.net and setting up World of Warcraft.\n\nThe process includes:\n- Wine prefix creation\n- Battle.net download and installation\n- WoW-specific optimizations\n- Desktop integration"
+    
+    # Call the installation function (implemented in previous tasks)
+    if install_battlenet; then
+        message info "Installation Complete" "Battle.net and World of Warcraft setup completed successfully!"
+    else
+        message error "Installation Failed" "There was an error during the installation process.\n\nCheck the debug output for more details."
+    fi
+}
+
+main_menu_manage_runners() {
+    debug_print continue "Opening wine runner management..."
+    manage_wine_runners
+}
+
+main_menu_system_optimization() {
+    debug_print continue "Starting system optimization checks..."
+    message info "System Optimization" "This will check your system for optimal World of Warcraft performance.\n\nChecks include:\n- Memory requirements\n- File descriptor limits\n- Virtual memory settings\n- Graphics optimizations"
+    
+    if preflight_check; then
+        message info "System Check Complete" "Your system is optimized for World of Warcraft!"
+    else
+        message info "Optimization Needed" "Some system optimizations are recommended.\n\nPlease review the suggestions and apply fixes as needed."
+    fi
+}
+
+main_menu_game_configuration() {
+    debug_print continue "Opening game configuration options..."
+    message info "Game Configuration" "Configure Battle.net and World of Warcraft settings for optimal performance.\n\nThis includes:\n- Battle.net launcher settings\n- WoW graphics optimizations\n- Input and mouse settings\n- DXVK configuration"
+    
+    # This would call configuration functions implemented in previous tasks
+    configure_battlenet_and_wow
+}
+
+main_menu_launch_wow() {
+    debug_print continue "Launching World of Warcraft..."
+    
+    # Check if Battle.net is installed
+    if [[ -z "$wine_prefix" ]] || [[ ! -d "$wine_prefix" ]]; then
+        message error "Not Installed" "Battle.net and World of Warcraft are not installed yet.\n\nPlease use the installation option first."
+        return 1
+    fi
+    
+    message info "Launching WoW" "Starting World of Warcraft through Battle.net launcher...\n\nThe game will launch in a separate window."
+    
+    # Launch using the launch script created in previous tasks
+    if [[ -f "lib/wow-launch.sh" ]]; then
+        bash lib/wow-launch.sh
+    else
+        message error "Launch Script Missing" "The WoW launch script is missing.\n\nPlease reinstall or check the installation."
+    fi
+}
+
+main_menu_maintenance() {
+    debug_print continue "Opening maintenance and troubleshooting tools..."
+    maintenance_tools
+}
+
+main_menu_settings() {
+    debug_print continue "Opening settings and configuration..."
+    settings_menu
+}
+
+main_menu_help() {
+    debug_print continue "Displaying help and information..."
+    message info "Azeroth Winebar Help" "Azeroth Winebar v$script_version\n\nA helper script for World of Warcraft on Linux\n\nFeatures:\n- Automated Battle.net installation\n- Proton Experimental integration\n- System optimization\n- WoW-specific tweaks\n- Desktop integration\n\nFor more information, visit the project documentation or use the command line help option."
+}
+
+main_menu_exit() {
+    debug_print continue "User requested exit"
+    message info "Goodbye" "Thank you for using Azeroth Winebar!\n\nMay your adventures in Azeroth be lag-free!"
+    menu_loop_done
+}
+
+# Main menu display and navigation
+show_main_menu() {
+    local menu_text="Choose an option to manage your World of Warcraft installation:"
+    local selected_option
+    
+    # Display main menu
+    selected_option=$(menu "Azeroth Winebar - Main Menu" "$menu_text" "${main_menu_options[@]}")
+    
+    # Handle menu selection
+    case "$selected_option" in
+        1)
+            main_menu_install_battlenet
+            ;;
+        2)
+            main_menu_manage_runners
+            ;;
+        3)
+            main_menu_system_optimization
+            ;;
+        4)
+            main_menu_game_configuration
+            ;;
+        5)
+            main_menu_launch_wow
+            ;;
+        6)
+            main_menu_maintenance
+            ;;
+        7)
+            main_menu_settings
+            ;;
+        8)
+            main_menu_help
+            ;;
+        9)
+            main_menu_exit
+            ;;
+        *)
+            debug_print continue "Invalid menu selection or user cancelled"
+            return 1
+            ;;
+    esac
+    
+    return 0
+}
+
+# Main menu loop with flow control
+main_menu_loop() {
+    debug_print continue "Starting main menu loop..."
+    
+    # Reset menu loop control
+    menu_loop_reset
+    
+    # Main menu loop
+    while menu_should_continue; do
+        if ! show_main_menu; then
+            # User cancelled or error occurred
+            debug_print continue "Menu cancelled or error occurred"
+            break
+        fi
+        
+        # Small delay to prevent rapid looping
+        sleep 0.1
+    done
+    
+    debug_print continue "Main menu loop ended"
+}
+
+############################################################################
+# Placeholder functions for menu actions (to be implemented in other tasks)
+############################################################################
+
+# Placeholder for Battle.net and WoW configuration
+configure_battlenet_and_wow() {
+    message info "Configuration" "Battle.net and WoW configuration features will be available in the full implementation.\n\nThis includes:\n- Battle.net launcher settings\n- WoW Config.wtf modifications\n- Graphics optimizations\n- Input settings"
+}
+
+# Placeholder for settings menu
+settings_menu() {
+    local settings_options=(
+        "Reset Configuration"
+        "Change Wine Prefix Location"
+        "Change Game Directory"
+        "Debug Settings"
+        "Back to Main Menu"
+    )
+    
+    local menu_text="Configure Azeroth Winebar settings:"
+    local selected_option
+    
+    while true; do
+        selected_option=$(menu "Settings" "$menu_text" "${settings_options[@]}")
+        
+        case "$selected_option" in
+            1)
+                if message question "Reset Configuration" "This will reset all Azeroth Winebar configuration to defaults.\n\nAre you sure you want to continue?"; then
+                    reset_config
+                    message info "Reset Complete" "Configuration has been reset to defaults."
+                fi
+                ;;
+            2)
+                message info "Wine Prefix" "Wine prefix location management will be available in the full implementation."
+                ;;
+            3)
+                message info "Game Directory" "Game directory management will be available in the full implementation."
+                ;;
+            4)
+                if [[ $debug -eq 1 ]]; then
+                    debug=0
+                    message info "Debug Mode" "Debug mode disabled."
+                else
+                    debug=1
+                    message info "Debug Mode" "Debug mode enabled."
+                fi
+                ;;
+            5)
+                break
+                ;;
+            *)
+                break
+                ;;
+        esac
+    done
+}
+
+############################################################################
+# Application Initialization and Cleanup
+############################################################################
+
+# Global cleanup flag
+cleanup_in_progress=0
+
+# Cleanup function for graceful shutdown
+cleanup() {
+    # Prevent recursive cleanup calls
+    if [[ $cleanup_in_progress -eq 1 ]]; then
+        return 0
+    fi
+    cleanup_in_progress=1
+    
+    debug_print continue "Starting application cleanup..."
+    
+    # Kill any background processes we might have started
+    local pids_to_kill=()
+    
+    # Look for wine processes that might be hanging
+    if [[ -n "$wine_prefix" ]]; then
+        local wine_pids
+        wine_pids=$(pgrep -f "$wine_prefix" 2>/dev/null || true)
+        if [[ -n "$wine_pids" ]]; then
+            debug_print continue "Found wine processes to clean up: $wine_pids"
+            # Note: We don't automatically kill wine processes as they might be legitimate games
+            # Just log them for debugging
+        fi
+    fi
+    
+    # Clean up temporary files
+    local temp_dirs=(
+        "/tmp/azeroth-winebar-download"
+        "/tmp/azeroth-winebar-*"
+    )
+    
+    for temp_pattern in "${temp_dirs[@]}"; do
+        # Use find to safely handle glob patterns
+        find /tmp -maxdepth 1 -name "$(basename "$temp_pattern")" -type d 2>/dev/null | while read -r temp_dir; do
+            if [[ -d "$temp_dir" ]]; then
+                debug_print continue "Cleaning up temporary directory: $temp_dir"
+                rm -rf "$temp_dir" 2>/dev/null || true
+            fi
+        done
+    done
+    
+    # Sync filesystem to ensure all writes are completed
+    sync 2>/dev/null || true
+    
+    debug_print continue "Application cleanup completed"
+}
+
+# Signal handler for graceful shutdown
+signal_handler() {
+    local signal="$1"
+    debug_print continue "Received signal: $signal"
+    
+    case "$signal" in
+        "INT"|"TERM")
+            echo
+            debug_print continue "Interrupt signal received, initiating graceful shutdown..."
+            message info "Shutdown" "Azeroth Winebar is shutting down gracefully...\n\nPlease wait while we clean up."
+            ;;
+        "EXIT")
+            debug_print continue "Exit signal received"
+            ;;
+        *)
+            debug_print continue "Unknown signal received: $signal"
+            ;;
+    esac
+    
+    # Perform cleanup
+    cleanup
+    
+    # Exit with appropriate code
+    case "$signal" in
+        "INT")
+            exit 130  # Standard exit code for SIGINT
+            ;;
+        "TERM")
+            exit 143  # Standard exit code for SIGTERM
+            ;;
+        *)
+            exit 1
+            ;;
+    esac
+}
+
+# Setup signal handlers
+setup_signal_handlers() {
+    debug_print continue "Setting up signal handlers..."
+    
+    # Handle common termination signals
+    trap 'signal_handler INT' INT     # Ctrl+C
+    trap 'signal_handler TERM' TERM   # Termination request
+    trap 'signal_handler EXIT' EXIT   # Script exit
+    
+    debug_print continue "Signal handlers configured"
+}
+
+# Enhanced application initialization
+initialize_application() {
+    debug_print continue "Starting enhanced application initialization..."
+    
+    # Set up signal handlers first
+    setup_signal_handlers
+    
+    # Validate shell environment
+    if [[ -z "$BASH_VERSION" ]]; then
+        echo "Error: This script requires bash shell" >&2
+        exit 1
+    fi
+    
+    # Check bash version (require 4.0+)
+    local bash_major_version
+    bash_major_version="${BASH_VERSION%%.*}"
+    if [[ "$bash_major_version" -lt 4 ]]; then
+        echo "Error: This script requires bash 4.0 or later (current: $BASH_VERSION)" >&2
+        exit 1
+    fi
+    
+    # Set strict error handling for better reliability
+    set -eE  # Exit on error, including in functions and subshells
+    set -u   # Exit on undefined variables
+    set -o pipefail  # Exit on pipe failures
+    
+    # Create error handler for set -e
+    error_handler() {
+        local exit_code=$?
+        local line_number=$1
+        debug_print exit "Script error on line $line_number (exit code: $exit_code)"
+        cleanup
+        exit $exit_code
+    }
+    trap 'error_handler $LINENO' ERR
+    
+    # Validate system requirements
+    debug_print continue "Validating system requirements..."
+    
+    # Check if we're running on Linux
+    if [[ "$(uname -s)" != "Linux" ]]; then
+        debug_print exit "This script is designed for Linux systems only"
+        exit 1
+    fi
+    
+    # Check available disk space in home directory (require at least 1GB)
+    local available_space
+    available_space=$(df -BG "$HOME" | awk 'NR==2 {print $4}' | sed 's/G//')
+    if [[ "$available_space" -lt 1 ]]; then
+        debug_print exit "Insufficient disk space. At least 1GB free space required in home directory"
+        exit 1
+    fi
+    
+    # Setup configuration directories
+    if ! setup_config_dirs; then
+        debug_print exit "Failed to setup configuration directories"
+        exit 1
+    fi
+    
+    # Load existing configuration
+    getdirs
+    
+    # Check dependencies
+    if ! check_dependencies; then
+        debug_print exit "Dependency check failed"
+        exit 1
+    fi
+    
+    # Validate wine installation if wine prefix exists
+    if [[ -n "$wine_prefix" ]] && [[ -d "$wine_prefix" ]]; then
+        if ! check_wine; then
+            debug_print continue "Warning: Wine validation failed, but continuing..."
+        fi
+    fi
+    
+    debug_print continue "Enhanced application initialization completed successfully"
+    return 0
+}
+
+# Application startup sequence
+startup_sequence() {
+    debug_print continue "Starting $script_name v$script_version..."
+    
+    # Initialize application with enhanced checks
+    if ! initialize_application; then
+        debug_print exit "Application initialization failed"
+        exit 1
+    fi
+    
+    # Log startup information
+    debug_print continue "System: $(uname -s) $(uname -r)"
+    debug_print continue "Shell: $BASH_VERSION"
+    debug_print continue "User: $(whoami)"
+    debug_print continue "Home: $HOME"
+    debug_print continue "Config: $config_dir"
+    debug_print continue "Wine Prefix: ${wine_prefix:-'Not configured'}"
+    debug_print continue "Game Directory: ${game_dir:-'Not configured'}"
+    
+    debug_print continue "Startup sequence completed successfully"
+}
+
+############################################################################
+# Main Function
+############################################################################
+
 # Main function
 main() {
+    local direct_function=""
+    local function_args=()
+    
     # Parse command line arguments
     while [[ $# -gt 0 ]]; do
         case $1 in
@@ -5095,24 +5540,140 @@ main() {
                 debug_print continue "Debug mode enabled"
                 shift
                 ;;
-            *)
+            --install)
+                direct_function="install_battlenet"
+                shift
+                ;;
+            --runners)
+                direct_function="manage_wine_runners"
+                shift
+                ;;
+            --preflight)
+                direct_function="preflight_check"
+                shift
+                ;;
+            --launch)
+                direct_function="main_menu_launch_wow"
+                shift
+                ;;
+            --maintenance)
+                direct_function="maintenance_tools"
+                shift
+                ;;
+            --settings)
+                direct_function="settings_menu"
+                shift
+                ;;
+            --reset-config)
+                direct_function="reset_config"
+                shift
+                ;;
+            --list-runners)
+                direct_function="list_installed_runners"
+                shift
+                ;;
+            --wine-shell)
+                direct_function="open_wine_shell"
+                shift
+                ;;
+            --winecfg)
+                direct_function="run_winecfg"
+                shift
+                ;;
+            --*)
                 echo "Unknown option: $1"
                 echo "Use -h or --help for usage information"
                 exit 1
                 ;;
+            *)
+                # Collect remaining arguments as function parameters
+                function_args+=("$1")
+                shift
+                ;;
         esac
     done
     
-    # Initialize application
-    if ! initialize; then
-        debug_print exit "Application initialization failed"
-        exit 1
+    # Run startup sequence
+    startup_sequence
+    
+    # Handle direct function calls
+    if [[ -n "$direct_function" ]]; then
+        debug_print continue "Executing direct function: $direct_function"
+        
+        case "$direct_function" in
+            "install_battlenet")
+                main_menu_install_battlenet
+                ;;
+            "manage_wine_runners")
+                main_menu_manage_runners
+                ;;
+            "preflight_check")
+                main_menu_system_optimization
+                ;;
+            "main_menu_launch_wow")
+                main_menu_launch_wow
+                ;;
+            "maintenance_tools")
+                main_menu_maintenance
+                ;;
+            "settings_menu")
+                main_menu_settings
+                ;;
+            "reset_config")
+                if message question "Reset Configuration" "This will reset all Azeroth Winebar configuration to defaults.\n\nAre you sure you want to continue?"; then
+                    reset_config
+                    message info "Reset Complete" "Configuration has been reset to defaults."
+                else
+                    debug_print continue "Configuration reset cancelled by user"
+                fi
+                ;;
+            "list_installed_runners")
+                echo "Installed Wine Runners:"
+                echo "======================"
+                if list_installed_runners; then
+                    echo
+                    echo "Use --runners to manage wine runners interactively."
+                else
+                    echo "No wine runners installed."
+                    echo "Use --runners to install wine runners."
+                fi
+                ;;
+            "open_wine_shell")
+                if [[ -z "$wine_prefix" ]]; then
+                    message error "No Wine Prefix" "No wine prefix is configured.\n\nPlease install Battle.net first or configure a wine prefix."
+                    exit 1
+                else
+                    open_wine_shell
+                fi
+                ;;
+            "run_winecfg")
+                if [[ -z "$wine_prefix" ]]; then
+                    message error "No Wine Prefix" "No wine prefix is configured.\n\nPlease install Battle.net first or configure a wine prefix."
+                    exit 1
+                else
+                    run_winecfg
+                fi
+                ;;
+            *)
+                debug_print exit "Unknown direct function: $direct_function"
+                exit 1
+                ;;
+        esac
+        
+        debug_print continue "Direct function execution completed"
+        exit 0
     fi
     
-    # Welcome message
-    message info "Welcome" "Welcome to $script_name!\n\nThis helper script will assist you with installing and optimizing World of Warcraft and Battle.net on Linux.\n\nCore utility functions and menu system are now implemented.\nAdditional features will be added in subsequent tasks."
+    # Show welcome message on first run
+    if is_first_run; then
+        message info "Welcome to Azeroth Winebar" "Welcome to Azeroth Winebar v$script_version!\n\nThis helper script will assist you with installing and optimizing World of Warcraft and Battle.net on Linux using Proton Experimental.\n\nFeatures:\n- Automated Battle.net installation\n- System optimization checks\n- WoW-specific tweaks and optimizations\n- Desktop integration\n- Wine runner management\n\nLet's get started!"
+        mark_first_run_complete
+    fi
     
-    debug_print continue "$script_name startup completed"
+    # Start main menu loop
+    main_menu_loop
+    
+    debug_print continue "$script_name shutdown completed"
 }
 
 # Run main function if script is executed directly
