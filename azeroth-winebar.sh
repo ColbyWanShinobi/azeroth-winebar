@@ -3799,6 +3799,1246 @@ show_version() {
     echo "License: GPL-3.0"
 }
 
+############################################################################
+# Configuration Reset and Backup System
+############################################################################
+
+# Backup WoW keybinds
+backup_wow_keybinds() {
+    debug_print continue "Starting WoW keybinds backup..."
+    
+    # Load directories
+    if ! getdirs; then
+        debug_print exit "Failed to load directory configuration"
+        return 1
+    fi
+    
+    # Check if game directory is configured
+    if [[ -z "$game_dir" ]]; then
+        message error "Game Directory Not Set" "No game directory is configured.\n\nPlease set up your game directory first through the installation menu."
+        return 1
+    fi
+    
+    # Find WoW installation directory
+    local wow_dir=""
+    local possible_wow_dirs=(
+        "$game_dir/World of Warcraft"
+        "$game_dir/_retail_"
+        "$game_dir"
+    )
+    
+    for dir in "${possible_wow_dirs[@]}"; do
+        if [[ -d "$dir" ]]; then
+            # Check for WoW executable or WTF directory
+            if [[ -f "$dir/Wow.exe" || -f "$dir/WowClassic.exe" || -d "$dir/WTF" ]]; then
+                wow_dir="$dir"
+                break
+            fi
+        fi
+    done
+    
+    if [[ -z "$wow_dir" ]]; then
+        message error "WoW Installation Not Found" "Could not find World of Warcraft installation in:\n$game_dir\n\nPlease ensure WoW is installed and the game directory is correctly configured."
+        return 1
+    fi
+    
+    debug_print continue "Found WoW directory: $wow_dir"
+    
+    # Look for keybind files in WTF directory
+    local wtf_dir="$wow_dir/WTF"
+    if [[ ! -d "$wtf_dir" ]]; then
+        message error "WTF Directory Not Found" "WoW configuration directory not found:\n$wtf_dir\n\nPlease run WoW at least once to create configuration files."
+        return 1
+    fi
+    
+    # Find keybind files (bindings-cache.wtf and account-specific bindings)
+    local keybind_files=()
+    
+    # Global bindings cache
+    if [[ -f "$wtf_dir/bindings-cache.wtf" ]]; then
+        keybind_files+=("$wtf_dir/bindings-cache.wtf")
+    fi
+    
+    # Account-specific bindings
+    local account_dirs=("$wtf_dir"/Account/*)
+    for account_dir in "${account_dirs[@]}"; do
+        if [[ -d "$account_dir" ]]; then
+            # Account-level bindings
+            if [[ -f "$account_dir/bindings-cache.wtf" ]]; then
+                keybind_files+=("$account_dir/bindings-cache.wtf")
+            fi
+            
+            # Character-specific bindings
+            local server_dirs=("$account_dir"/*)
+            for server_dir in "${server_dirs[@]}"; do
+                if [[ -d "$server_dir" ]]; then
+                    local char_dirs=("$server_dir"/*)
+                    for char_dir in "${char_dirs[@]}"; do
+                        if [[ -d "$char_dir" && -f "$char_dir/bindings-cache.wtf" ]]; then
+                            keybind_files+=("$char_dir/bindings-cache.wtf")
+                        fi
+                    done
+                fi
+            done
+        fi
+    done
+    
+    if [[ ${#keybind_files[@]} -eq 0 ]]; then
+        message info "No Keybinds Found" "No keybind files were found in your WoW installation.\n\nThis is normal if you haven't customized any keybinds yet."
+        return 0
+    fi
+    
+    # Create backup directory with timestamp
+    local backup_timestamp
+    backup_timestamp=$(date +"%Y%m%d_%H%M%S")
+    local backup_dir="$config_dir/keybinds/backup_$backup_timestamp"
+    
+    if ! mkdir -p "$backup_dir"; then
+        debug_print exit "Failed to create backup directory: $backup_dir"
+        return 1
+    fi
+    
+    debug_print continue "Created backup directory: $backup_dir"
+    
+    # Backup keybind files
+    local backed_up_files=0
+    for keybind_file in "${keybind_files[@]}"; do
+        if [[ -f "$keybind_file" ]]; then
+            # Create relative path for backup
+            local relative_path
+            relative_path=$(echo "$keybind_file" | sed "s|$wtf_dir/||")
+            local backup_file="$backup_dir/$relative_path"
+            local backup_file_dir
+            backup_file_dir=$(dirname "$backup_file")
+            
+            # Create directory structure in backup
+            if ! mkdir -p "$backup_file_dir"; then
+                debug_print continue "Warning: Failed to create backup subdirectory: $backup_file_dir"
+                continue
+            fi
+            
+            # Copy keybind file
+            if cp "$keybind_file" "$backup_file"; then
+                debug_print continue "Backed up: $relative_path"
+                ((backed_up_files++))
+            else
+                debug_print continue "Warning: Failed to backup: $relative_path"
+            fi
+        fi
+    done
+    
+    if [[ $backed_up_files -eq 0 ]]; then
+        message error "Backup Failed" "Failed to backup any keybind files.\n\nPlease check file permissions and try again."
+        rm -rf "$backup_dir"
+        return 1
+    fi
+    
+    # Create backup info file
+    local info_file="$backup_dir/backup_info.txt"
+    cat > "$info_file" << EOF
+Azeroth Winebar - WoW Keybinds Backup
+=====================================
+
+Backup Date: $(date)
+WoW Directory: $wow_dir
+Files Backed Up: $backed_up_files
+
+Backed up files:
+EOF
+    
+    for keybind_file in "${keybind_files[@]}"; do
+        if [[ -f "$keybind_file" ]]; then
+            local relative_path
+            relative_path=$(echo "$keybind_file" | sed "s|$wtf_dir/||")
+            echo "- $relative_path" >> "$info_file"
+        fi
+    done
+    
+    debug_print continue "WoW keybinds backup completed successfully"
+    message info "Backup Complete" "Successfully backed up $backed_up_files keybind files.\n\nBackup Location: $backup_dir\n\nYou can restore these keybinds later using the restore function."
+    
+    return 0
+}
+
+# List available keybind backups
+list_keybind_backups() {
+    debug_print continue "Listing available keybind backups..."
+    
+    local keybinds_dir="$config_dir/keybinds"
+    if [[ ! -d "$keybinds_dir" ]]; then
+        debug_print continue "No keybinds directory found"
+        return 1
+    fi
+    
+    local backup_dirs=()
+    local backup_info=()
+    
+    # Find backup directories
+    for backup_dir in "$keybinds_dir"/backup_*; do
+        if [[ -d "$backup_dir" ]]; then
+            local backup_name
+            backup_name=$(basename "$backup_dir")
+            backup_dirs+=("$backup_name")
+            
+            # Get backup info if available
+            local info_file="$backup_dir/backup_info.txt"
+            local backup_date="unknown"
+            local file_count="unknown"
+            
+            if [[ -f "$info_file" ]]; then
+                backup_date=$(grep "Backup Date:" "$info_file" | cut -d':' -f2- | sed 's/^ *//')
+                file_count=$(grep "Files Backed Up:" "$info_file" | cut -d':' -f2 | sed 's/^ *//')
+            fi
+            
+            backup_info+=("$backup_name ($file_count files, $backup_date)")
+        fi
+    done
+    
+    if [[ ${#backup_dirs[@]} -eq 0 ]]; then
+        debug_print continue "No keybind backups found"
+        return 1
+    fi
+    
+    debug_print continue "Found ${#backup_dirs[@]} keybind backups"
+    printf '%s\n' "${backup_info[@]}"
+    return 0
+}
+
+# Restore WoW keybinds from backup
+restore_wow_keybinds() {
+    debug_print continue "Starting WoW keybinds restore..."
+    
+    # List available backups
+    local backup_list
+    if ! backup_list=$(list_keybind_backups); then
+        message info "No Backups Available" "No keybind backups were found.\n\nYou can create a backup using the backup function."
+        return 1
+    fi
+    
+    # Convert backup list to array for menu
+    local backup_options=()
+    while IFS= read -r line; do
+        backup_options+=("$line")
+    done <<< "$backup_list"
+    
+    backup_options+=("Cancel")
+    
+    # Show backup selection menu
+    local choice
+    choice=$(menu "Restore Keybinds" "Select a backup to restore:" "${backup_options[@]}")
+    
+    if [[ $? -ne 0 ]]; then
+        debug_print continue "Keybind restore cancelled"
+        return 1
+    fi
+    
+    # Handle cancel option
+    if [[ $choice -eq ${#backup_options[@]} ]]; then
+        debug_print continue "Keybind restore cancelled by user"
+        return 1
+    fi
+    
+    # Get selected backup name
+    local selected_backup
+    selected_backup=$(echo "${backup_options[$((choice-1))]}" | cut -d' ' -f1)
+    local backup_dir="$config_dir/keybinds/$selected_backup"
+    
+    if [[ ! -d "$backup_dir" ]]; then
+        message error "Backup Not Found" "Selected backup directory does not exist:\n$backup_dir"
+        return 1
+    fi
+    
+    debug_print continue "Selected backup: $selected_backup"
+    debug_print continue "Backup directory: $backup_dir"
+    
+    # Load directories
+    if ! getdirs; then
+        debug_print exit "Failed to load directory configuration"
+        return 1
+    fi
+    
+    # Check if game directory is configured
+    if [[ -z "$game_dir" ]]; then
+        message error "Game Directory Not Set" "No game directory is configured.\n\nPlease set up your game directory first through the installation menu."
+        return 1
+    fi
+    
+    # Find WoW installation directory
+    local wow_dir=""
+    local possible_wow_dirs=(
+        "$game_dir/World of Warcraft"
+        "$game_dir/_retail_"
+        "$game_dir"
+    )
+    
+    for dir in "${possible_wow_dirs[@]}"; do
+        if [[ -d "$dir" ]]; then
+            if [[ -f "$dir/Wow.exe" || -f "$dir/WowClassic.exe" || -d "$dir/WTF" ]]; then
+                wow_dir="$dir"
+                break
+            fi
+        fi
+    done
+    
+    if [[ -z "$wow_dir" ]]; then
+        message error "WoW Installation Not Found" "Could not find World of Warcraft installation in:\n$game_dir\n\nPlease ensure WoW is installed and the game directory is correctly configured."
+        return 1
+    fi
+    
+    local wtf_dir="$wow_dir/WTF"
+    if [[ ! -d "$wtf_dir" ]]; then
+        message error "WTF Directory Not Found" "WoW configuration directory not found:\n$wtf_dir\n\nPlease run WoW at least once to create configuration files."
+        return 1
+    fi
+    
+    # Confirm restore operation
+    if ! message question "Confirm Restore" "This will restore keybinds from backup:\n$selected_backup\n\nTo: $wtf_dir\n\nExisting keybind files will be overwritten.\n\nDo you want to continue?"; then
+        debug_print continue "Keybind restore cancelled by user"
+        return 1
+    fi
+    
+    # Restore keybind files
+    local restored_files=0
+    local failed_files=0
+    
+    # Find all backup files
+    while IFS= read -r -d '' backup_file; do
+        # Get relative path
+        local relative_path
+        relative_path=$(echo "$backup_file" | sed "s|$backup_dir/||")
+        
+        # Skip backup info file
+        if [[ "$relative_path" == "backup_info.txt" ]]; then
+            continue
+        fi
+        
+        local target_file="$wtf_dir/$relative_path"
+        local target_dir
+        target_dir=$(dirname "$target_file")
+        
+        # Create target directory if needed
+        if ! mkdir -p "$target_dir"; then
+            debug_print continue "Warning: Failed to create directory: $target_dir"
+            ((failed_files++))
+            continue
+        fi
+        
+        # Copy backup file to target
+        if cp "$backup_file" "$target_file"; then
+            debug_print continue "Restored: $relative_path"
+            ((restored_files++))
+        else
+            debug_print continue "Warning: Failed to restore: $relative_path"
+            ((failed_files++))
+        fi
+    done < <(find "$backup_dir" -type f -print0)
+    
+    # Report results
+    if [[ $restored_files -eq 0 ]]; then
+        message error "Restore Failed" "Failed to restore any keybind files from backup.\n\nPlease check file permissions and try again."
+        return 1
+    fi
+    
+    local result_message="Successfully restored $restored_files keybind files"
+    if [[ $failed_files -gt 0 ]]; then
+        result_message="$result_message\n\nWarning: $failed_files files failed to restore"
+    fi
+    result_message="$result_message\n\nFrom: $backup_dir\nTo: $wtf_dir\n\nYour keybinds have been restored."
+    
+    debug_print continue "WoW keybinds restore completed"
+    message info "Restore Complete" "$result_message"
+    
+    return 0
+}
+
+# Reset helper configuration
+reset_helper_config() {
+    debug_print continue "Starting helper configuration reset..."
+    
+    # Confirm reset operation
+    if ! message question "Confirm Configuration Reset" "This will reset all Azeroth Winebar configuration to defaults.\n\nThe following will be reset:\n- Wine prefix path\n- Game directory path\n- Default wine runner\n- First run flag\n\nKeybind backups will NOT be deleted.\n\nDo you want to continue?"; then
+        debug_print continue "Configuration reset cancelled by user"
+        return 1
+    fi
+    
+    debug_print continue "Resetting helper configuration..."
+    
+    # Reset configuration using existing function
+    if ! reset_config; then
+        message error "Reset Failed" "Failed to reset configuration files.\n\nPlease check file permissions and try again."
+        return 1
+    fi
+    
+    # Also remove default runner config
+    local runner_config="$config_dir/default-runner.conf"
+    if [[ -f "$runner_config" ]]; then
+        if rm "$runner_config"; then
+            debug_print continue "Removed default runner configuration"
+        else
+            debug_print continue "Warning: Failed to remove default runner configuration"
+        fi
+    fi
+    
+    debug_print continue "Helper configuration reset completed"
+    message info "Configuration Reset Complete" "All Azeroth Winebar configuration has been reset to defaults.\n\nYou will need to reconfigure:\n- Wine prefix path\n- Game directory path\n- Wine runner selection\n\nKeybind backups have been preserved."
+    
+    return 0
+}
+
+# Delete old keybind backups
+cleanup_old_backups() {
+    debug_print continue "Starting old backup cleanup..."
+    
+    local keybinds_dir="$config_dir/keybinds"
+    if [[ ! -d "$keybinds_dir" ]]; then
+        message info "No Backups Found" "No keybinds directory found.\n\nThere are no backups to clean up."
+        return 0
+    fi
+    
+    # Find backup directories older than 30 days
+    local old_backups=()
+    local cutoff_date
+    cutoff_date=$(date -d "30 days ago" +%s)
+    
+    for backup_dir in "$keybinds_dir"/backup_*; do
+        if [[ -d "$backup_dir" ]]; then
+            local backup_time
+            backup_time=$(stat -c %Y "$backup_dir" 2>/dev/null || echo "0")
+            
+            if [[ $backup_time -lt $cutoff_date ]]; then
+                local backup_name
+                backup_name=$(basename "$backup_dir")
+                local backup_date
+                backup_date=$(date -d "@$backup_time" "+%Y-%m-%d %H:%M" 2>/dev/null || echo "unknown")
+                old_backups+=("$backup_name ($backup_date)")
+            fi
+        fi
+    done
+    
+    if [[ ${#old_backups[@]} -eq 0 ]]; then
+        message info "No Old Backups" "No backups older than 30 days were found.\n\nNo cleanup is needed."
+        return 0
+    fi
+    
+    # Show old backups and confirm deletion
+    local backup_list
+    backup_list=$(printf '%s\n' "${old_backups[@]}")
+    
+    if ! message question "Cleanup Old Backups" "Found ${#old_backups[@]} backups older than 30 days:\n\n$backup_list\n\nDo you want to delete these old backups?"; then
+        debug_print continue "Backup cleanup cancelled by user"
+        return 1
+    fi
+    
+    # Delete old backups
+    local deleted_count=0
+    for backup_dir in "$keybinds_dir"/backup_*; do
+        if [[ -d "$backup_dir" ]]; then
+            local backup_time
+            backup_time=$(stat -c %Y "$backup_dir" 2>/dev/null || echo "0")
+            
+            if [[ $backup_time -lt $cutoff_date ]]; then
+                if rm -rf "$backup_dir"; then
+                    debug_print continue "Deleted old backup: $(basename "$backup_dir")"
+                    ((deleted_count++))
+                else
+                    debug_print continue "Warning: Failed to delete backup: $(basename "$backup_dir")"
+                fi
+            fi
+        fi
+    done
+    
+    debug_print continue "Old backup cleanup completed"
+    message info "Cleanup Complete" "Successfully deleted $deleted_count old backup directories.\n\nRecent backups (less than 30 days old) have been preserved."
+    
+    return 0
+}
+
+# Configuration management menu
+manage_configuration() {
+    debug_print continue "Starting configuration management..."
+    
+    local menu_options=(
+        "Backup WoW Keybinds"
+        "Restore WoW Keybinds"
+        "List Keybind Backups"
+        "Reset Helper Configuration"
+        "Cleanup Old Backups"
+        "Back to Main Menu"
+    )
+    
+    while menu_should_continue; do
+        local choice
+        choice=$(menu "Configuration Management" "Select a configuration management option:" "${menu_options[@]}")
+        
+        if [[ $? -ne 0 ]]; then
+            debug_print continue "Configuration management menu cancelled"
+            break
+        fi
+        
+        case "$choice" in
+            1)
+                backup_wow_keybinds
+                ;;
+            2)
+                restore_wow_keybinds
+                ;;
+            3)
+                local backup_list
+                if backup_list=$(list_keybind_backups); then
+                    message info "Available Backups" "Keybind backups found:\n\n$backup_list"
+                else
+                    message info "No Backups Found" "No keybind backups are currently available.\n\nYou can create a backup using the backup function."
+                fi
+                ;;
+            4)
+                reset_helper_config
+                ;;
+            5)
+                cleanup_old_backups
+                ;;
+            6)
+                debug_print continue "Returning to main menu"
+                break
+                ;;
+            *)
+                message error "Invalid Selection" "Invalid menu selection: $choice"
+                ;;
+        esac
+    done
+    
+    debug_print continue "Configuration management completed"
+    return 0
+}
+
+############################################################################
+# DXVK Management System
+############################################################################
+
+# DXVK GitHub API URL
+dxvk_api_url="https://api.github.com/repos/doitsujin/dxvk/releases"
+
+# Get latest DXVK release information
+get_latest_dxvk_release() {
+    debug_print continue "Fetching latest DXVK release information..."
+    
+    local release_json
+    if ! release_json=$(curl -s "$dxvk_api_url/latest"); then
+        debug_print exit "Failed to fetch DXVK release information"
+        return 1
+    fi
+    
+    # Extract version and download URL
+    local version
+    local download_url
+    
+    version=$(echo "$release_json" | grep -o '"tag_name": *"[^"]*"' | sed 's/"tag_name": *"\([^"]*\)"/\1/')
+    download_url=$(echo "$release_json" | grep -o '"browser_download_url": *"[^"]*\.tar\.gz"' | head -1 | sed 's/"browser_download_url": *"\([^"]*\)"/\1/')
+    
+    if [[ -z "$version" || -z "$download_url" ]]; then
+        debug_print exit "Failed to parse DXVK release information"
+        return 1
+    fi
+    
+    debug_print continue "Latest DXVK version: $version"
+    debug_print continue "Download URL: $download_url"
+    
+    echo "$version|$download_url"
+    return 0
+}
+
+# Check current DXVK version in wine prefix
+check_dxvk_version() {
+    local prefix_path="$1"
+    
+    if [[ -z "$prefix_path" ]]; then
+        debug_print exit "No wine prefix specified for DXVK version check"
+        return 1
+    fi
+    
+    if [[ ! -d "$prefix_path" ]]; then
+        debug_print exit "Wine prefix does not exist: $prefix_path"
+        return 1
+    fi
+    
+    # Check for DXVK DLL files in system32
+    local system32_dir="$prefix_path/drive_c/windows/system32"
+    local dxvk_dll="$system32_dir/dxgi.dll"
+    
+    if [[ ! -f "$dxvk_dll" ]]; then
+        debug_print continue "DXVK not installed in wine prefix"
+        echo "not_installed"
+        return 0
+    fi
+    
+    # Try to get version from DXVK DLL (this is approximate)
+    # DXVK doesn't embed version info in a standard way, so we'll check file modification time
+    local install_date
+    install_date=$(stat -c %Y "$dxvk_dll" 2>/dev/null || echo "0")
+    
+    if [[ "$install_date" -gt 0 ]]; then
+        local formatted_date
+        formatted_date=$(date -d "@$install_date" "+%Y-%m-%d" 2>/dev/null || echo "unknown")
+        echo "installed_$formatted_date"
+    else
+        echo "installed_unknown"
+    fi
+    
+    return 0
+}
+
+# Download DXVK release
+download_dxvk() {
+    local version="$1"
+    local download_url="$2"
+    local temp_dir="/tmp/azeroth-winebar-dxvk"
+    
+    if [[ -z "$version" || -z "$download_url" ]]; then
+        debug_print exit "Missing parameters for DXVK download"
+        return 1
+    fi
+    
+    debug_print continue "Downloading DXVK $version..."
+    debug_print continue "Download URL: $download_url"
+    
+    # Create temporary download directory
+    if ! mkdir -p "$temp_dir"; then
+        debug_print exit "Failed to create temporary download directory"
+        return 1
+    fi
+    
+    local download_file="$temp_dir/dxvk-$version.tar.gz"
+    
+    # Download DXVK
+    if ! curl -L -o "$download_file" "$download_url"; then
+        debug_print exit "Failed to download DXVK from $download_url"
+        rm -rf "$temp_dir"
+        return 1
+    fi
+    
+    # Verify download
+    if [[ ! -f "$download_file" ]]; then
+        debug_print exit "Downloaded DXVK file not found: $download_file"
+        rm -rf "$temp_dir"
+        return 1
+    fi
+    
+    local file_size
+    file_size=$(stat -c%s "$download_file" 2>/dev/null || echo "0")
+    if [[ "$file_size" -lt 100000 ]]; then  # Less than 100KB is suspicious
+        debug_print exit "Downloaded DXVK file appears to be too small: $file_size bytes"
+        rm -rf "$temp_dir"
+        return 1
+    fi
+    
+    debug_print continue "DXVK download completed successfully: $file_size bytes"
+    echo "$download_file"
+    return 0
+}
+
+# Extract DXVK archive
+extract_dxvk() {
+    local archive_path="$1"
+    local extract_dir="$2"
+    
+    if [[ -z "$archive_path" || -z "$extract_dir" ]]; then
+        debug_print exit "Missing parameters for DXVK extraction"
+        return 1
+    fi
+    
+    if [[ ! -f "$archive_path" ]]; then
+        debug_print exit "DXVK archive not found: $archive_path"
+        return 1
+    fi
+    
+    debug_print continue "Extracting DXVK archive..."
+    debug_print continue "Archive: $archive_path"
+    debug_print continue "Extract to: $extract_dir"
+    
+    # Create extraction directory
+    if ! mkdir -p "$extract_dir"; then
+        debug_print exit "Failed to create extraction directory: $extract_dir"
+        return 1
+    fi
+    
+    # Extract archive
+    if ! tar -xzf "$archive_path" -C "$extract_dir" --strip-components=1; then
+        debug_print exit "Failed to extract DXVK archive"
+        return 1
+    fi
+    
+    # Verify extraction
+    if [[ ! -d "$extract_dir/x64" || ! -d "$extract_dir/x32" ]]; then
+        debug_print exit "DXVK extraction appears incomplete - missing x64 or x32 directories"
+        return 1
+    fi
+    
+    debug_print continue "DXVK extraction completed successfully"
+    return 0
+}
+
+# Install DXVK in wine prefix
+install_dxvk_in_prefix() {
+    local prefix_path="$1"
+    local dxvk_dir="$2"
+    local wine_runner="$3"
+    
+    if [[ -z "$prefix_path" || -z "$dxvk_dir" ]]; then
+        debug_print exit "Missing parameters for DXVK installation"
+        return 1
+    fi
+    
+    if [[ ! -d "$prefix_path" ]]; then
+        debug_print exit "Wine prefix does not exist: $prefix_path"
+        return 1
+    fi
+    
+    if [[ ! -d "$dxvk_dir" ]]; then
+        debug_print exit "DXVK directory does not exist: $dxvk_dir"
+        return 1
+    fi
+    
+    debug_print continue "Installing DXVK in wine prefix..."
+    debug_print continue "Wine prefix: $prefix_path"
+    debug_print continue "DXVK directory: $dxvk_dir"
+    
+    # Get wine binary
+    local wine_binary
+    if [[ -n "$wine_runner" && "$wine_runner" != "system" ]]; then
+        if ! wine_binary=$(get_runner_binary "$wine_runner"); then
+            debug_print exit "Failed to get wine binary for runner: $wine_runner"
+            return 1
+        fi
+    else
+        wine_binary="wine"
+    fi
+    
+    # Set wine environment
+    export WINEPREFIX="$prefix_path"
+    
+    # Copy DXVK DLLs to wine prefix
+    local system32_dir="$prefix_path/drive_c/windows/system32"
+    local syswow64_dir="$prefix_path/drive_c/windows/syswow64"
+    
+    # Ensure directories exist
+    if ! mkdir -p "$system32_dir" "$syswow64_dir"; then
+        debug_print exit "Failed to create wine system directories"
+        return 1
+    fi
+    
+    # Copy 64-bit DLLs
+    debug_print continue "Installing 64-bit DXVK DLLs..."
+    local x64_dlls=("d3d9.dll" "d3d10core.dll" "d3d11.dll" "dxgi.dll")
+    for dll in "${x64_dlls[@]}"; do
+        if [[ -f "$dxvk_dir/x64/$dll" ]]; then
+            if ! cp "$dxvk_dir/x64/$dll" "$system32_dir/"; then
+                debug_print exit "Failed to copy 64-bit DLL: $dll"
+                return 1
+            fi
+            debug_print continue "Installed 64-bit DLL: $dll"
+        else
+            debug_print continue "Warning: 64-bit DLL not found: $dll"
+        fi
+    done
+    
+    # Copy 32-bit DLLs
+    debug_print continue "Installing 32-bit DXVK DLLs..."
+    for dll in "${x64_dlls[@]}"; do
+        if [[ -f "$dxvk_dir/x32/$dll" ]]; then
+            if ! cp "$dxvk_dir/x32/$dll" "$syswow64_dir/"; then
+                debug_print exit "Failed to copy 32-bit DLL: $dll"
+                return 1
+            fi
+            debug_print continue "Installed 32-bit DLL: $dll"
+        else
+            debug_print continue "Warning: 32-bit DLL not found: $dll"
+        fi
+    done
+    
+    # Set DLL overrides in wine registry
+    debug_print continue "Setting DXVK DLL overrides in wine registry..."
+    local dll_overrides=("d3d9" "d3d10core" "d3d11" "dxgi")
+    for dll in "${dll_overrides[@]}"; do
+        if ! WINEPREFIX="$prefix_path" "$wine_binary" reg add "HKEY_CURRENT_USER\\Software\\Wine\\DllOverrides" /v "$dll" /t REG_SZ /d "native,builtin" /f >/dev/null 2>&1; then
+            debug_print continue "Warning: Failed to set DLL override for $dll"
+        else
+            debug_print continue "Set DLL override: $dll = native,builtin"
+        fi
+    done
+    
+    debug_print continue "DXVK installation completed successfully"
+    return 0
+}
+
+# Update DXVK in wine prefix
+update_dxvk() {
+    debug_print continue "Starting DXVK update process..."
+    
+    # Load directories
+    if ! getdirs; then
+        debug_print exit "Failed to load directory configuration"
+        return 1
+    fi
+    
+    # Check if wine prefix is configured
+    if [[ -z "$wine_prefix" ]]; then
+        message error "Wine Prefix Not Set" "No wine prefix is configured.\n\nPlease set up your wine prefix first through the installation menu."
+        return 1
+    fi
+    
+    # Validate wine prefix exists
+    if [[ ! -d "$wine_prefix" ]]; then
+        message error "Wine Prefix Missing" "The configured wine prefix does not exist:\n$wine_prefix\n\nPlease reinstall or reconfigure your wine prefix."
+        return 1
+    fi
+    
+    # Get current DXVK version
+    local current_version
+    current_version=$(check_dxvk_version "$wine_prefix")
+    
+    # Get latest DXVK release
+    local release_info
+    if ! release_info=$(get_latest_dxvk_release); then
+        message error "DXVK Update Failed" "Failed to fetch latest DXVK release information.\n\nPlease check your internet connection and try again."
+        return 1
+    fi
+    
+    local latest_version
+    local download_url
+    IFS='|' read -r latest_version download_url <<< "$release_info"
+    
+    # Show current and latest versions
+    local version_info="Current DXVK: $current_version\nLatest DXVK: $latest_version"
+    
+    if [[ "$current_version" == "not_installed" ]]; then
+        if ! message question "Install DXVK" "$version_info\n\nDXVK is not currently installed in your wine prefix.\n\nDo you want to install the latest version?"; then
+            debug_print continue "DXVK installation cancelled by user"
+            return 1
+        fi
+    else
+        if ! message question "Update DXVK" "$version_info\n\nDo you want to update DXVK to the latest version?\n\nThis will replace the current installation."; then
+            debug_print continue "DXVK update cancelled by user"
+            return 1
+        fi
+    fi
+    
+    # Get wine runner
+    local wine_runner
+    wine_runner=$(get_default_runner)
+    if [[ -z "$wine_runner" ]]; then
+        wine_runner="system"
+    fi
+    
+    # Download DXVK
+    local download_file
+    if ! download_file=$(download_dxvk "$latest_version" "$download_url"); then
+        message error "Download Failed" "Failed to download DXVK $latest_version.\n\nPlease check your internet connection and try again."
+        return 1
+    fi
+    
+    # Extract DXVK
+    local extract_dir="/tmp/azeroth-winebar-dxvk-extract"
+    if ! extract_dxvk "$download_file" "$extract_dir"; then
+        message error "Extraction Failed" "Failed to extract DXVK archive.\n\nThe download may be corrupted."
+        rm -rf "/tmp/azeroth-winebar-dxvk"
+        return 1
+    fi
+    
+    # Install DXVK
+    if ! install_dxvk_in_prefix "$wine_prefix" "$extract_dir" "$wine_runner"; then
+        message error "Installation Failed" "Failed to install DXVK in wine prefix.\n\nPlease check the debug output for more information."
+        rm -rf "/tmp/azeroth-winebar-dxvk"
+        return 1
+    fi
+    
+    # Clean up temporary files
+    rm -rf "/tmp/azeroth-winebar-dxvk"
+    
+    debug_print continue "DXVK update completed successfully"
+    message info "DXVK Update Complete" "DXVK has been successfully updated to version $latest_version.\n\nWine Prefix: $wine_prefix\n\nYour games should now use the latest DXVK version for improved performance."
+    
+    return 0
+}
+
+# Check DXVK installation status
+check_dxvk_status() {
+    debug_print continue "Checking DXVK installation status..."
+    
+    # Load directories
+    if ! getdirs; then
+        debug_print exit "Failed to load directory configuration"
+        return 1
+    fi
+    
+    # Check if wine prefix is configured
+    if [[ -z "$wine_prefix" ]]; then
+        message info "DXVK Status" "No wine prefix is configured.\n\nPlease set up your wine prefix first to check DXVK status."
+        return 1
+    fi
+    
+    # Validate wine prefix exists
+    if [[ ! -d "$wine_prefix" ]]; then
+        message info "DXVK Status" "The configured wine prefix does not exist:\n$wine_prefix\n\nPlease reinstall or reconfigure your wine prefix."
+        return 1
+    fi
+    
+    # Get current DXVK version
+    local current_version
+    current_version=$(check_dxvk_version "$wine_prefix")
+    
+    # Get latest DXVK release
+    local latest_version="unknown"
+    local release_info
+    if release_info=$(get_latest_dxvk_release); then
+        IFS='|' read -r latest_version _ <<< "$release_info"
+    fi
+    
+    # Display status
+    local status_message="Wine Prefix: $wine_prefix\n\nCurrent DXVK: $current_version\nLatest Available: $latest_version"
+    
+    if [[ "$current_version" == "not_installed" ]]; then
+        status_message="$status_message\n\nDXVK is not installed in your wine prefix.\nYou can install it using the DXVK management menu."
+    else
+        status_message="$status_message\n\nDXVK is installed and ready to use.\nYou can update it if a newer version is available."
+    fi
+    
+    message info "DXVK Status" "$status_message"
+    return 0
+}
+
+# DXVK management menu
+manage_dxvk() {
+    debug_print continue "Starting DXVK management..."
+    
+    local menu_options=(
+        "Check DXVK Status"
+        "Update/Install DXVK"
+        "Back to Main Menu"
+    )
+    
+    while menu_should_continue; do
+        local choice
+        choice=$(menu "DXVK Management" "Select a DXVK management option:" "${menu_options[@]}")
+        
+        if [[ $? -ne 0 ]]; then
+            debug_print continue "DXVK management menu cancelled"
+            break
+        fi
+        
+        case "$choice" in
+            1)
+                check_dxvk_status
+                ;;
+            2)
+                update_dxvk
+                ;;
+            3)
+                debug_print continue "Returning to main menu"
+                break
+                ;;
+            *)
+                message error "Invalid Selection" "Invalid menu selection: $choice"
+                ;;
+        esac
+    done
+    
+    debug_print continue "DXVK management completed"
+    return 0
+}
+
+############################################################################
+# Wine Prefix Management Tools
+############################################################################
+
+# Launch winecfg for wine prefix configuration
+launch_winecfg() {
+    debug_print continue "Launching winecfg for wine prefix configuration..."
+    
+    # Load directories
+    if ! getdirs; then
+        debug_print exit "Failed to load directory configuration"
+        return 1
+    fi
+    
+    # Check if wine prefix is configured
+    if [[ -z "$wine_prefix" ]]; then
+        message error "Wine Prefix Not Set" "No wine prefix is configured.\n\nPlease set up your wine prefix first through the installation menu."
+        return 1
+    fi
+    
+    # Validate wine prefix exists
+    if [[ ! -d "$wine_prefix" ]]; then
+        message error "Wine Prefix Missing" "The configured wine prefix does not exist:\n$wine_prefix\n\nPlease reinstall or reconfigure your wine prefix."
+        return 1
+    fi
+    
+    # Get wine runner
+    local wine_runner
+    wine_runner=$(get_default_runner)
+    if [[ -z "$wine_runner" ]]; then
+        debug_print continue "No default runner set, checking for system wine"
+        if ! command_exists "wine"; then
+            message error "Wine Not Available" "No wine runner is configured and system wine is not available.\n\nPlease install a wine runner first."
+            return 1
+        fi
+        wine_runner="system"
+    fi
+    
+    # Set up wine environment
+    export WINEPREFIX="$wine_prefix"
+    
+    # Get wine binary path
+    local wine_binary
+    if [[ "$wine_runner" == "system" ]]; then
+        wine_binary="wine"
+    else
+        if ! wine_binary=$(get_runner_binary "$wine_runner"); then
+            message error "Wine Runner Error" "Failed to get wine binary for runner: $wine_runner\n\nPlease check your wine runner installation."
+            return 1
+        fi
+    fi
+    
+    debug_print continue "Using wine binary: $wine_binary"
+    debug_print continue "Wine prefix: $wine_prefix"
+    
+    # Inform user about winecfg launch
+    message info "Launching Winecfg" "Launching wine configuration tool (winecfg).\n\nWine Prefix: $wine_prefix\nWine Runner: $wine_runner\n\nThe configuration window will open shortly."
+    
+    # Launch winecfg
+    debug_print continue "Executing: WINEPREFIX='$wine_prefix' '$wine_binary' winecfg"
+    if ! WINEPREFIX="$wine_prefix" "$wine_binary" winecfg; then
+        message error "Winecfg Failed" "Failed to launch winecfg.\n\nPlease check that your wine installation is working correctly."
+        return 1
+    fi
+    
+    debug_print continue "Winecfg completed successfully"
+    message info "Configuration Complete" "Wine configuration completed.\n\nAny changes you made have been saved to your wine prefix."
+    
+    return 0
+}
+
+# Launch wine control panel for controller configuration
+launch_wine_control() {
+    debug_print continue "Launching wine control panel for controller configuration..."
+    
+    # Load directories
+    if ! getdirs; then
+        debug_print exit "Failed to load directory configuration"
+        return 1
+    fi
+    
+    # Check if wine prefix is configured
+    if [[ -z "$wine_prefix" ]]; then
+        message error "Wine Prefix Not Set" "No wine prefix is configured.\n\nPlease set up your wine prefix first through the installation menu."
+        return 1
+    fi
+    
+    # Validate wine prefix exists
+    if [[ ! -d "$wine_prefix" ]]; then
+        message error "Wine Prefix Missing" "The configured wine prefix does not exist:\n$wine_prefix\n\nPlease reinstall or reconfigure your wine prefix."
+        return 1
+    fi
+    
+    # Get wine runner
+    local wine_runner
+    wine_runner=$(get_default_runner)
+    if [[ -z "$wine_runner" ]]; then
+        debug_print continue "No default runner set, checking for system wine"
+        if ! command_exists "wine"; then
+            message error "Wine Not Available" "No wine runner is configured and system wine is not available.\n\nPlease install a wine runner first."
+            return 1
+        fi
+        wine_runner="system"
+    fi
+    
+    # Set up wine environment
+    export WINEPREFIX="$wine_prefix"
+    
+    # Get wine binary path
+    local wine_binary
+    if [[ "$wine_runner" == "system" ]]; then
+        wine_binary="wine"
+    else
+        if ! wine_binary=$(get_runner_binary "$wine_runner"); then
+            message error "Wine Runner Error" "Failed to get wine binary for runner: $wine_runner\n\nPlease check your wine runner installation."
+            return 1
+        fi
+    fi
+    
+    debug_print continue "Using wine binary: $wine_binary"
+    debug_print continue "Wine prefix: $wine_prefix"
+    
+    # Inform user about control panel launch
+    message info "Launching Wine Control Panel" "Launching wine control panel for controller configuration.\n\nWine Prefix: $wine_prefix\nWine Runner: $wine_runner\n\nThe control panel will open shortly.\n\nLook for 'Game Controllers' or 'Gaming Options' in the control panel."
+    
+    # Launch wine control panel
+    debug_print continue "Executing: WINEPREFIX='$wine_prefix' '$wine_binary' control"
+    if ! WINEPREFIX="$wine_prefix" "$wine_binary" control; then
+        message error "Control Panel Failed" "Failed to launch wine control panel.\n\nPlease check that your wine installation is working correctly."
+        return 1
+    fi
+    
+    debug_print continue "Wine control panel completed successfully"
+    message info "Configuration Complete" "Controller configuration completed.\n\nAny changes you made have been saved to your wine prefix."
+    
+    return 0
+}
+
+# Open wine prefix shell for debugging
+open_wine_shell() {
+    debug_print continue "Opening wine prefix shell for debugging..."
+    
+    # Load directories
+    if ! getdirs; then
+        debug_print exit "Failed to load directory configuration"
+        return 1
+    fi
+    
+    # Check if wine prefix is configured
+    if [[ -z "$wine_prefix" ]]; then
+        message error "Wine Prefix Not Set" "No wine prefix is configured.\n\nPlease set up your wine prefix first through the installation menu."
+        return 1
+    fi
+    
+    # Validate wine prefix exists
+    if [[ ! -d "$wine_prefix" ]]; then
+        message error "Wine Prefix Missing" "The configured wine prefix does not exist:\n$wine_prefix\n\nPlease reinstall or reconfigure your wine prefix."
+        return 1
+    fi
+    
+    # Get wine runner
+    local wine_runner
+    wine_runner=$(get_default_runner)
+    if [[ -z "$wine_runner" ]]; then
+        debug_print continue "No default runner set, checking for system wine"
+        if ! command_exists "wine"; then
+            message error "Wine Not Available" "No wine runner is configured and system wine is not available.\n\nPlease install a wine runner first."
+            return 1
+        fi
+        wine_runner="system"
+    fi
+    
+    # Get wine binary path
+    local wine_binary
+    if [[ "$wine_runner" == "system" ]]; then
+        wine_binary="wine"
+    else
+        if ! wine_binary=$(get_runner_binary "$wine_runner"); then
+            message error "Wine Runner Error" "Failed to get wine binary for runner: $wine_runner\n\nPlease check your wine runner installation."
+            return 1
+        fi
+    fi
+    
+    debug_print continue "Using wine binary: $wine_binary"
+    debug_print continue "Wine prefix: $wine_prefix"
+    
+    # Inform user about shell access
+    message info "Wine Prefix Shell Access" "Opening a shell with wine environment configured.\n\nWine Prefix: $wine_prefix\nWine Runner: $wine_runner\n\nYou can use wine commands directly in this shell.\nType 'exit' to return to the main menu.\n\nUseful commands:\n- wine --version\n- winecfg\n- winetricks\n- wine regedit\n- wine cmd"
+    
+    # Set up wine environment variables
+    export WINEPREFIX="$wine_prefix"
+    export PATH="$(dirname "$wine_binary"):$PATH"
+    
+    # Create a temporary script to set up the wine environment
+    local temp_script="/tmp/azeroth-winebar-wine-shell.sh"
+    cat > "$temp_script" << EOF
+#!/bin/bash
+export WINEPREFIX="$wine_prefix"
+export PATH="$(dirname "$wine_binary"):\$PATH"
+
+echo "=== Azeroth Winebar Wine Shell ==="
+echo "Wine Prefix: $wine_prefix"
+echo "Wine Runner: $wine_runner"
+echo "Wine Binary: $wine_binary"
+echo
+echo "Wine environment is configured. You can now use wine commands."
+echo "Type 'exit' to return to Azeroth Winebar."
+echo
+
+# Change to wine prefix directory for convenience
+cd "$wine_prefix" || cd "\$HOME"
+
+# Start interactive shell
+exec bash --rcfile <(echo "PS1='[wine-shell] \$ '")
+EOF
+    
+    chmod +x "$temp_script"
+    
+    # Launch the wine shell
+    debug_print continue "Launching wine shell environment"
+    if [[ $gui_zenity -eq 1 ]]; then
+        # For GUI mode, open in a new terminal if possible
+        if command_exists "gnome-terminal"; then
+            gnome-terminal -- bash -c "$temp_script"
+        elif command_exists "konsole"; then
+            konsole -e bash -c "$temp_script"
+        elif command_exists "xterm"; then
+            xterm -e bash -c "$temp_script"
+        else
+            # Fallback to current terminal
+            bash "$temp_script"
+        fi
+    else
+        # Terminal mode - run directly
+        bash "$temp_script"
+    fi
+    
+    # Clean up temporary script
+    rm -f "$temp_script"
+    
+    debug_print continue "Wine shell session completed"
+    message info "Shell Session Complete" "Wine shell session has ended.\n\nYou are now back in the main Azeroth Winebar interface."
+    
+    return 0
+}
+
+# Wine prefix management menu
+manage_wine_prefix() {
+    debug_print continue "Starting wine prefix management..."
+    
+    local menu_options=(
+        "Launch Wine Configuration (winecfg)"
+        "Configure Game Controllers"
+        "Open Wine Shell for Debugging"
+        "Back to Main Menu"
+    )
+    
+    while menu_should_continue; do
+        local choice
+        choice=$(menu "Wine Prefix Management" "Select a wine prefix management option:" "${menu_options[@]}")
+        
+        if [[ $? -ne 0 ]]; then
+            debug_print continue "Wine prefix management menu cancelled"
+            break
+        fi
+        
+        case "$choice" in
+            1)
+                launch_winecfg
+                ;;
+            2)
+                launch_wine_control
+                ;;
+            3)
+                open_wine_shell
+                ;;
+            4)
+                debug_print continue "Returning to main menu"
+                break
+                ;;
+            *)
+                message error "Invalid Selection" "Invalid menu selection: $choice"
+                ;;
+        esac
+    done
+    
+    debug_print continue "Wine prefix management completed"
+    return 0
+}
+
+############################################################################
+# Help and Version Functions
+############################################################################
+
 # Display help information
 show_help() {
     echo "Usage: $0 [OPTIONS]"

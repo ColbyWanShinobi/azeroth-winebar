@@ -115,20 +115,20 @@
     - Add optional gamemode and gamescope integration support
     - _Requirements: 8.4, 8.5_
 
-- [ ] 8. Build maintenance and troubleshooting tools
-  - [ ] 8.1 Create wine prefix management tools
+- [x] 8. Build maintenance and troubleshooting tools
+  - [x] 8.1 Create wine prefix management tools
     - Implement winecfg launcher for prefix configuration
     - Write wine controller configuration access
     - Create wine prefix shell access for debugging
     - _Requirements: 4.2, 4.4, 4.5_
 
-  - [ ] 8.2 Implement DXVK management system
+  - [x] 8.2 Implement DXVK management system
     - Create DXVK update functionality
     - Write DXVK installation and configuration management
     - Implement DXVK version checking and updating
     - _Requirements: 4.3_
 
-  - [ ] 8.3 Build configuration reset and backup system
+  - [x] 8.3 Build configuration reset and backup system
     - Implement helper config reset functionality
     - Create WoW keybind backup and restore system
     - Write configuration directory management
