@@ -3795,7 +3795,7 @@ show_version() {
     echo "$script_name v$script_version"
     echo "World of Warcraft Helper Script for Linux"
     echo
-    echo "Based on lug-helper, adapted for Battle.net and WoW"
+    echo "Based on the lug-helper project, adapted for Battle.net and WoW"
     echo "License: GPL-3.0"
 }
 
